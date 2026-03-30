@@ -220,11 +220,19 @@ def play(session_id: str) -> None:
             return
         # Self-healing: auto-assign if no assignment found (ghost session or stale cleanup)
         log.warning("play: no assignment found for %s, auto-assigning", session_id)
-        assign(session_id)
-        assignment_file = ASSIGNMENTS_DIR / f"{session_id}.json"
-        if not assignment_file.is_file():
-            log.debug("play: auto-assign failed, skipping")
+        # Call assign internals directly to avoid stdout pollution (assign() prints hookSpecificOutput)
+        pool = _load_pool()
+        if not pool:
+            log.debug("play: auto-assign failed, empty pool")
             return
+        ASSIGNMENTS_DIR.mkdir(parents=True, exist_ok=True)
+        assigned = _get_assigned_files()
+        available = [s for s in pool if s["file"] not in assigned]
+        if not available:
+            available = pool
+        choice = random.choice(available)
+        assignment_file.write_text(json.dumps(choice))
+        log.debug("play: auto-assigned %s -> %s", session_id, choice["name"])
 
     choice = json.loads(assignment_file.read_text())
     wav_path = SOUNDS_DIR / choice["file"]
