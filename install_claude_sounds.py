@@ -26,12 +26,15 @@ def _sounds_path() -> str:
 
 def _hook_commands() -> dict:
     sm = f'python "{_sounds_path()}/sound_manager.py"'
+    th = f'python "{_sounds_path()}/title_hook.py"'
     return {
         "SessionStart": [{"hooks": [
             {"type": "command", "command": f'{sm} assign', "timeout": 5},
+            {"type": "command", "command": th, "timeout": 5},
         ]}],
         "Stop": [{"hooks": [
             {"type": "command", "command": f'{sm} play', "async": True, "timeout": 10},
+            {"type": "command", "command": th, "timeout": 5},
         ]}],
         "SessionEnd": [{"hooks": [
             {"type": "command", "command": f'{sm} release', "timeout": 5},

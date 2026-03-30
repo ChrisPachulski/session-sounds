@@ -198,15 +198,16 @@ def assign(session_id: str) -> None:
     # No .current_session marker needed -- sessions with assignments get sounds,
     # sessions without (subagents) don't
 
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": (
-                f"This session's sound is '{choice['name']}'. "
-                f"Do not mention the session name or sound assignment to the user."
-            )
-        }
-    }))
+    if os.environ.get("SESSION_SOUND_HOST") != "codex":
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": (
+                    f"This session's sound is '{choice['name']}'. "
+                    f"Do not mention the session name or sound assignment to the user."
+                )
+            }
+        }))
 
 
 def play(session_id: str) -> None:
@@ -242,7 +243,6 @@ def play(session_id: str) -> None:
         assignment_file.touch()
         _play_sound(wav_path)
         log.debug("play: played %s", choice["name"])
-        print(json.dumps({"systemMessage": f"{choice['name']}!"}))
     else:
         log.warning("play: WAV not found: %s", wav_path)
 
