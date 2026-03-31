@@ -25,7 +25,7 @@ from pathlib import Path
 
 SOUNDS_DIR = Path(__file__).parent
 ASSIGNMENTS_DIR = Path.home() / ".claude" / "sounds" / "assignments"
-STALE_MINUTES = 120
+PRESSURE_THRESHOLD = 5  # Only reclaim slots when fewer than this many available
 DEBUG_LOG = Path.home() / ".claude" / "sounds" / "debug.log"
 
 # Production files only: no _a/_b/_c candidates, no src_ sources
@@ -81,18 +81,39 @@ def _load_pool() -> list[dict[str, str]]:
     return pool
 
 
-def _cleanup_stale() -> None:
-    """Remove assignment files older than STALE_MINUTES."""
+def _cleanup_if_pressured(pool: list[dict[str, str]]) -> None:
+    """Reclaim oldest assignments only when pool is under pressure.
+
+    Instead of time-based eviction (which kills overnight sessions),
+    only evict when available pool drops below PRESSURE_THRESHOLD.
+    Evicts oldest-by-mtime first (most likely to be leaked orphans).
+    """
     if not ASSIGNMENTS_DIR.is_dir():
         return
-    cutoff = time.time() - (STALE_MINUTES * 60)
+    assigned = _get_assigned_files()
+    available_count = len([s for s in pool if s["file"] not in assigned])
+    if available_count >= PRESSURE_THRESHOLD:
+        return
+
+    candidates = []
     for f in ASSIGNMENTS_DIR.glob("*.json"):
         try:
-            if f.stat().st_mtime < cutoff:
-                log.debug("Cleaning stale assignment: %s", f.name)
-                f.unlink(missing_ok=True)
-        except OSError:
+            data = json.loads(f.read_text())
+            if "reserved_at" in data:
+                continue  # Skip reservations, handled by _cleanup_orphaned_reservations
+            candidates.append((f.stat().st_mtime, f))
+        except (json.JSONDecodeError, OSError):
             pass
+
+    if not candidates:
+        return
+
+    candidates.sort()  # oldest mtime first
+    needed = PRESSURE_THRESHOLD - available_count
+    for _, f in candidates[:needed]:
+        log.debug("Pressure cleanup: evicting %s (pool pressure: %d available, need %d)",
+                  f.name, available_count, PRESSURE_THRESHOLD)
+        f.unlink(missing_ok=True)
 
 
 def _cleanup_orphaned_reservations() -> None:
@@ -181,7 +202,7 @@ def pick() -> None:
         log.warning("pick: empty pool")
         return
     ASSIGNMENTS_DIR.mkdir(parents=True, exist_ok=True)
-    _cleanup_stale()
+    _cleanup_if_pressured(pool)
     _cleanup_orphaned_reservations()
 
     assigned = _get_assigned_files()
@@ -308,7 +329,6 @@ def release(session_id: str) -> None:
         log.debug("release: removed %s", assignment_file.name)
     except OSError:
         pass
-    _cleanup_stale()
 
 
 if __name__ == "__main__":

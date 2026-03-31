@@ -66,7 +66,7 @@ def _pick_sound() -> tuple[dict[str, str], str] | None:
         return None
 
     sound_manager.ASSIGNMENTS_DIR.mkdir(parents=True, exist_ok=True)
-    sound_manager._cleanup_stale()
+    sound_manager._cleanup_if_pressured(pool)
     sound_manager._cleanup_orphaned_reservations()
 
     assigned = sound_manager._get_assigned_files()
