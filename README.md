@@ -1,28 +1,12 @@
-# Claude Session Sounds
+# Session Sounds
 
-Random notification sounds and named terminal tabs for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex](https://openai.com/index/introducing-codex/) sessions.
+You run six Claude sessions and four Codex sessions across three terminals. A sound plays. Which session was that? No idea.
 
-**The included sounds are starter defaults.** Swap, rename, add, or remove any of them. The system is fully customizable -- make it yours.
+Session Sounds fixes this. Every session gets a random notification sound and a named terminal tab. "Lightsaber" plays the lightsaber clip. "Gotcha" plays the Pokeball catch. You hear the sound, glance at the tab, and know exactly which session just finished thinking.
 
-Each time you start a session, a random sound is assigned. The sound plays after every response, and your terminal tab shows the sound name so you can tell sessions apart at a glance.
+**The 25 included sounds are starter defaults.** Swap them, rename them, delete them, add your own. The system rebuilds the pool on every session start. Zero config beyond the initial install.
 
-## What you get
-
-- **25 notification sounds** -- retro game SFX, movie themes, ambient clips
-- **Named terminal tabs** -- each session gets a unique name (e.g., "Gotcha", "The Shire", "Pentakill")
-- **Agent-agnostic** -- works with both Claude Code and OpenAI Codex
-- **Works everywhere** -- Windows, macOS, Linux. VS Code integrated terminal, iTerm2, Terminal.app, etc.
-
-## Requirements
-
-- Python 3.9+
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://openai.com/index/introducing-codex/) installed and on your PATH
-- **Audio playback** (for notification sounds):
-  - Windows: built-in (winsound)
-  - macOS: built-in (afplay)
-  - Linux: one of `paplay` (PulseAudio), `pw-play` (PipeWire), or `aplay` (ALSA)
-
-## Install
+## 30-second install
 
 ```bash
 git clone https://github.com/ChrisPachulski/session-sounds.git
@@ -30,92 +14,49 @@ cd session-sounds
 python install_claude_sounds.py
 ```
 
-The installer:
-1. Copies sound files and scripts to `~/.claude/sounds/`
-2. Adds hooks to `~/.claude/settings.json` (merged with your existing config)
-3. Adds `claude` and `codex` shell wrappers to your profile (PowerShell, bash, or zsh)
-4. Configures VS Code terminal tab titles (if VS Code is installed)
+That's it. The installer copies files to `~/.claude/sounds/`, merges hooks into your existing `settings.json`, drops shell wrappers into your profile, and configures VS Code tab titles. Open a new terminal, type `claude` or `codex`.
 
-Then open a new terminal and type `claude`.
+## Requirements
 
-## Adding your own sounds
+- Python 3.9+
+- Claude Code or Codex (or both) on your PATH
+- Audio playback: Windows and macOS have it built-in. Linux needs one of `paplay`, `pw-play`, or `aplay`.
 
-Drop `.wav` files into `~/.claude/sounds/`. The filename becomes the display name:
+## Make it yours
 
-```
-cool_cat.wav      ->  "Cool Cat"
-mario_powerup.wav ->  "Mario Powerup"
-my_sound.wav      ->  "My Sound"
-```
+Drop a `.wav` into `~/.claude/sounds/`. The filename becomes the display name (`danger_zone.wav` -> "Danger Zone"). Want a custom name? Add an entry to `_DISPLAY_NAMES` in `sound_manager.py`. Want to remove a sound? Delete the `.wav`. The pool rebuilds every time.
 
-Or add entries to the `_DISPLAY_NAMES` dictionary in `sound_manager.py` for custom names.
+Sound specs: WAV, 44100 Hz, mono, 16-bit PCM, under 5 seconds, peak volume under 50%.
 
-Requirements for sound files:
-- WAV format (44100 Hz, mono, 16-bit PCM recommended)
-- Under 5 seconds
-- Peak volume under 50%
+### Pick what you want
+
+| Want | Do |
+|------|----|
+| Sounds + tab names | Install and done (default) |
+| Sounds only, no tab names | Remove the `title_hook.py` entries from `settings.json` |
+| Tab names only, no sounds | Remove the `Stop` hook |
+| Startup sound only | Remove all hooks, keep the shell wrapper |
 
 ## How it works
 
-The system uses a single Python launcher (`agent_launcher.py`) that manages the full session lifecycle:
+One Python launcher (`agent_launcher.py`) manages the full lifecycle. The shell wrapper calls it, it picks a sound, reserves it so no two concurrent sessions get the same one, plays the startup clip, sets the tab name, and launches your agent.
 
-```
-Shell wrapper calls agent_launcher.py
-  -> picks a random sound from the pool
-  -> reserves it (prevents duplicates across sessions)
-  -> plays startup sound in background thread
-  -> sets terminal tab name immediately
-  -> launches the agent as a child process
+For **Claude Code**, hooks handle the rest. SessionStart assigns the sound, Stop plays it after each response (async, non-blocking), SessionEnd releases it back to the pool. Hooks run as Claude subprocesses, so they inherit PTY access -- that's how tab titles work even after the TUI takes over.
 
-Agent responds
-  -> Claude: hooks fire (play sound + refresh tab name)
-  -> Codex: watcher thread detects task_complete in rollout JSONL
+For **Codex**, hooks are disabled on Windows in the Rust binary (as of March 2026). The launcher compensates with a watcher thread that discovers the rollout JSONL via the Codex state DB (with a filesystem scan fallback), tails it for `task_complete` events, and plays the sound on each one.
 
-Session ends
-  -> assignment file cleaned up
-  -> sound returned to the pool
-```
+## Known quirks
 
-### Claude: hook-based
+**Codex tab title flickers during "Thinking."** Codex's built-in title system fires an OSC escape sequence on every status change -- including a spinner at 100ms intervals. The watcher reasserts the custom title after each response, so it always lands in the right place. The flicker during thinking is a Codex limitation, not a bug here.
 
-Claude Code supports [hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) -- shell commands that fire on session events. The installer configures three:
+**Sessions idle for 2+ hours lose their assignment.** Stale cleanup runs at 120 minutes. If you step away and come back, the session auto-assigns a new random sound. The original is gone. This is a known tradeoff -- without cleanup, dead sessions would eventually exhaust the pool.
 
-- **SessionStart**: assigns the sound picked by the launcher
-- **Stop**: plays the sound after each response (async, non-blocking)
-- **SessionEnd**: releases the assignment back to the pool
+**Rollout discovery takes 10-20 seconds on Codex.** The launcher polls for the rollout file after launch. This is normal. If it times out (60s), per-response sounds are disabled for that session, but the startup sound and tab name still work.
 
-Hooks also push ANSI title sequences to keep the terminal tab name visible. This works because hooks run as Claude Code subprocesses, so they have PTY access even after the TUI takes over the terminal.
+## Default sounds
 
-### Codex: JSONL watcher
-
-On Windows, Codex has hooks disabled in the Rust binary (`cfg!(windows)`). The launcher compensates by spawning a watcher thread that:
-
-1. Discovers the active rollout file via `~/.codex/state_5.sqlite`
-2. Tails the JSONL for `task_complete` events using filesystem change notifications (`FindFirstChangeNotificationW` on Windows, polling elsewhere)
-3. Plays the assigned sound and refreshes the title on each event
-
-### Why hooks, not background processes
-
-Early versions used a background `title_keeper.py` process to loop ANSI title sequences. This failed because once Claude's TUI takes over the terminal, sibling processes lose PTY access -- their writes go nowhere. Hooks work because they are launched *by* Claude Code during its session, inheriting the active PTY.
-
-`title_keeper.py` is retained for legacy compatibility but the launcher + hooks architecture is primary.
-
-### Tab naming
-
-VS Code requires this setting for ANSI title sequences to work:
-
-```json
-{
-  "terminal.integrated.tabs.title": "${sequence}"
-}
-```
-
-The installer sets this automatically.
-
-## Core sounds
-
-| Sound | Display Name | Source |
-|-------|-------------|--------|
+| File | Tab Name | Source |
+|------|----------|--------|
 | abouttime.wav | About Time | About Time soundtrack |
 | africa.wav | Africa | Toto |
 | bond.wav | 007 | James Bond theme |
@@ -142,9 +83,23 @@ The installer sets this automatically.
 | takeonme.wav | Take On Me | a-ha |
 | tetris.wav | Tetris | Tetris theme |
 
+Replace any or all of them. The world is your oyster.
+
+## Troubleshooting
+
+Check `~/.claude/sounds/debug.log` first. It logs every pick, assign, play, and release with timestamps.
+
+| Symptom | Likely cause |
+|---------|-------------|
+| No sound at all | System audio muted or routed to wrong device. The log will show "played" even if you can't hear it. |
+| Wrong sound playing | Another session responded. Each session has its own sound -- check which tab name matches. |
+| Tab name blank in VS Code | `terminal.integrated.tabs.title` must be set to `${sequence}`. The installer does this, but verify. |
+| Codex tab flickers | Normal. Codex overwrites the title during thinking. It reasserts after each response. |
+| "rollout not found" in log | Codex took longer than 60s to create the session file. Startup sound and tab name still work. |
+
 ## Uninstall
 
-1. Remove hooks from `~/.claude/settings.json` (the `SessionStart`, `Stop`, and `SessionEnd` entries referencing `sound_manager.py` and `title_hook.py`)
+1. Remove the `SessionStart`, `Stop`, and `SessionEnd` hook entries referencing `sound_manager.py` and `title_hook.py` from `~/.claude/settings.json`
 2. Delete `~/.claude/sounds/`
 3. Remove the `claude` and `codex` functions from your shell profile
 
