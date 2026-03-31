@@ -11,6 +11,7 @@ Usage:
     python agent_launcher.py claude [args...]
     python agent_launcher.py codex [args...]
 """
+from __future__ import annotations
 
 import json
 import os
