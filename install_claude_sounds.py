@@ -44,52 +44,22 @@ def _hook_commands() -> dict:
     }
 
 
+def _launcher_path() -> str:
+    return str(SOUNDS_DST / "agent_launcher.py").replace("\\", "\\\\")
+
+
 def _powershell_wrapper() -> str:
-    sm = str(SOUNDS_DST / "sound_manager.py").replace("/", "\\")
-    tk = str(SOUNDS_DST / "title_keeper.py").replace("/", "\\")
-    fallback_exe = str(Path.home() / ".local" / "bin" / "claude.exe").replace("/", "\\")
+    launcher = str(SOUNDS_DST / "agent_launcher.py").replace("/", "\\")
     return f'''
-function claude {{
-    $sm = if (Test-Path ".claude/sounds/sound_manager.py") {{ ".claude/sounds/sound_manager.py" }} else {{ "{sm}" }}
-    $tk = if (Test-Path ".claude/sounds/title_keeper.py") {{ ".claude/sounds/title_keeper.py" }} else {{ "{tk}" }}
-    $claude_exe = (Get-Command claude -ErrorAction SilentlyContinue).Source
-    if (-not $claude_exe) {{ $claude_exe = "{fallback_exe}" }}
-    $title = python $sm pick
-    if ($title) {{
-        $env:CLAUDE_SOUND_TITLE = $title
-        $bg = Start-Process -NoNewWindow -PassThru -FilePath python -ArgumentList $tk
-        try {{
-            & $claude_exe --name $title @args
-        }} finally {{
-            Stop-Process -Id $bg.Id -ErrorAction SilentlyContinue
-        }}
-    }} else {{
-        & $claude_exe @args
-    }}
-}}'''
+function claude {{ python "{launcher}" claude @args }}
+function codex {{ python "{launcher}" codex @args }}'''
 
 
 def _bash_wrapper() -> str:
-    sm = SOUNDS_DST / "sound_manager.py"
-    tk = SOUNDS_DST / "title_keeper.py"
+    launcher = SOUNDS_DST / "agent_launcher.py"
     return f'''
-claude() {{
-    local sm tk title
-    if [ -f ".claude/sounds/sound_manager.py" ]; then sm=".claude/sounds/sound_manager.py"; else sm="{sm}"; fi
-    if [ -f ".claude/sounds/title_keeper.py" ]; then tk=".claude/sounds/title_keeper.py"; else tk="{tk}"; fi
-    title=$(python3 "$sm" pick 2>/dev/null)
-    if [ -n "$title" ]; then
-        export CLAUDE_SOUND_TITLE="$title"
-        python3 "$tk" &
-        local bg_pid=$!
-        trap "kill $bg_pid 2>/dev/null" EXIT
-        command claude --name "$title" "$@"
-        kill $bg_pid 2>/dev/null
-        trap - EXIT
-    else
-        command claude "$@"
-    fi
-}}'''
+claude() {{ python3 "{launcher}" claude "$@"; }}
+codex() {{ python3 "{launcher}" codex "$@"; }}'''
 
 
 def _update_vscode_settings() -> bool:
@@ -125,8 +95,6 @@ def install() -> None:
     print(f"  Created {SOUNDS_DST}")
 
     # 2. Copy sound files + scripts
-    # Note: codex_title_keeper.py is an optional Codex helper -- copied but not
-    # referenced by the default hook/wrapper configuration.
     for src in SOUNDS_SRC.iterdir():
         if src.is_dir():
             continue
@@ -182,7 +150,7 @@ def install() -> None:
                     lines = [l for l in content.split("\n") if "Set-Alias claude" not in l]
                     lines.append(wrapper)
                     profile.write_text("\n".join(lines))
-                    print(f"  Added claude wrapper to {profile}")
+                    print(f"  Added claude/codex wrappers to {profile}")
                 else:
                     print(f"  claude wrapper already in {profile}")
                 installed = True
@@ -199,7 +167,7 @@ def install() -> None:
             if "claude()" not in content:
                 with open(rc, "a") as f:
                     f.write("\n" + wrapper + "\n")
-                print(f"  Added claude wrapper to {rc}")
+                print(f"  Added claude/codex wrappers to {rc}")
             else:
                 print(f"  claude wrapper already in {rc}")
         else:

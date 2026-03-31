@@ -1,6 +1,4 @@
 """Hook script that pushes terminal-title updates for both Claude and Codex."""
-from __future__ import annotations
-
 import json
 import sys
 from pathlib import Path
