@@ -27,8 +27,9 @@ def _sounds_path() -> str:
 
 
 def _hook_commands() -> dict:
-    sm = f'python "{_sounds_path()}/sound_manager.py"'
-    th = f'python "{_sounds_path()}/title_hook.py"'
+    py = "python" if sys.platform == "win32" else "python3"
+    sm = f'{py} "{_sounds_path()}/sound_manager.py"'
+    th = f'{py} "{_sounds_path()}/title_hook.py"'
     return {
         "SessionStart": [{"hooks": [
             {"type": "command", "command": f'{sm} assign', "timeout": 5},

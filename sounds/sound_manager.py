@@ -282,7 +282,12 @@ def play(session_id: str) -> None:
         assignment_file.write_text(json.dumps(choice))
         log.debug("play: auto-assigned %s -> %s", session_id, choice["name"])
 
-    choice = json.loads(assignment_file.read_text())
+    try:
+        choice = json.loads(assignment_file.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        log.warning("play: corrupt assignment file for %s: %s", session_id, exc)
+        assignment_file.unlink(missing_ok=True)
+        return
     wav_path = SOUNDS_DIR / choice["file"]
     log.debug("play: wav_path=%s exists=%s", wav_path, wav_path.is_file())
     if wav_path.is_file():
