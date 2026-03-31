@@ -95,10 +95,18 @@ def _claim_reservation(reservation_id: str) -> None:
 # Codex rollout discovery
 # ---------------------------------------------------------------------------
 
-def _find_codex_rollout(launch_epoch: float, timeout: float = 30.0) -> Path | None:
-    """Poll state_5.sqlite for the newest rollout created after launch_epoch."""
+def _find_codex_rollout(launch_epoch: float, timeout: float = 60.0) -> Path | None:
+    """Find the rollout JSONL for the current Codex session.
+
+    Strategy: try the DB first (fast), then fall back to scanning the
+    sessions directory for recently-created JSONL files (robust against
+    DB transaction delays).
+    """
     deadline = time.time() + timeout
+    sessions_dir = Path.home() / ".codex" / "sessions"
+
     while time.time() < deadline:
+        # Strategy 1: DB query (fast when transaction is committed)
         try:
             with sqlite3.connect(str(CODEX_STATE_DB), timeout=2) as conn:
                 c = conn.cursor()
@@ -110,10 +118,30 @@ def _find_codex_rollout(launch_epoch: float, timeout: float = 30.0) -> Path | No
             if row and row[0]:
                 rollout = Path(row[0])
                 if row[1] >= launch_epoch and rollout.exists():
-                    log.debug("launcher: found rollout %s", rollout)
+                    log.debug("launcher: found rollout via DB %s", rollout)
                     return rollout
         except Exception as exc:
             log.debug("launcher: rollout query error: %s", exc)
+
+        # Strategy 2: filesystem scan (robust against uncommitted transactions)
+        try:
+            now = time.time()
+            candidates = []
+            for jsonl in sessions_dir.rglob("rollout-*.jsonl"):
+                try:
+                    mtime = jsonl.stat().st_mtime
+                    if mtime >= launch_epoch:
+                        candidates.append((mtime, jsonl))
+                except OSError:
+                    pass
+            if candidates:
+                candidates.sort(reverse=True)
+                rollout = candidates[0][1]
+                log.debug("launcher: found rollout via filesystem scan %s", rollout)
+                return rollout
+        except Exception as exc:
+            log.debug("launcher: filesystem scan error: %s", exc)
+
         time.sleep(0.5)
     log.warning("launcher: rollout not found within %.0fs", timeout)
     return None
