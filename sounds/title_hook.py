@@ -47,24 +47,21 @@ if session_id:
         if name:
             # Signal the spinner thread via state file
             state = _EVENT_STATE.get(hook_event, "spin")
-            # Find the spinner state file (keyed by reservation_id from env, or session_id)
-            reservation_id = os.environ.get("CLAUDE_SOUND_RESERVATION", "")
+            # The spinner thread reads .spinner_{reservation_id}
+            # Get reservation_id from the assignment file (stored at assign time)
+            reservation_id = assignment.get("reservation_id", "")
 
-            # Try reservation_id first (launcher uses this as session key for spinner)
-            for sid in (reservation_id, session_id):
-                if sid:
-                    state_file = ASSIGNMENTS_DIR / f".spinner_{sid}"
-                    try:
-                        dir_ = str(ASSIGNMENTS_DIR)
-                        fd, tmp = tempfile.mkstemp(dir=dir_, prefix=".spintmp_")
-                        os.write(fd, state.encode())
-                        os.close(fd)
-                        os.replace(tmp, str(state_file))
-                    except OSError:
-                        try:
-                            os.unlink(tmp)
-                        except Exception:
-                            pass
-
-            # Also emit title directly (fallback for non-spinner agents like Codex)
-            terminal_title.emit_title(name)
+            # Write to reservation_id file (spinner thread reads this)
+            target_id = reservation_id or session_id
+            state_file = ASSIGNMENTS_DIR / f".spinner_{target_id}"
+            try:
+                dir_ = str(ASSIGNMENTS_DIR)
+                fd, tmp = tempfile.mkstemp(dir=dir_, prefix=".spintmp_")
+                os.write(fd, state.encode())
+                os.close(fd)
+                os.replace(tmp, str(state_file))
+            except OSError:
+                try:
+                    os.unlink(tmp)
+                except Exception:
+                    pass

@@ -131,6 +131,54 @@ def _cleanup_orphaned_reservations() -> None:
             pass
 
 
+def _cleanup_dead_sessions() -> None:
+    """Evict assignments whose owning launcher process is dead.
+
+    Each launcher holds .lock_{reservation_id} open for its session lifetime.
+    On Windows, open files cannot be deleted -- so if we CAN delete the lock
+    file, the launcher is dead and the assignment is orphaned.
+
+    Assignments without lock files (pre-lock-system) are left alone here;
+    pressure-based cleanup handles them as a backstop.
+    """
+    if not ASSIGNMENTS_DIR.is_dir():
+        return
+    for f in ASSIGNMENTS_DIR.glob("*.json"):
+        try:
+            data = json.loads(f.read_text())
+            if "reserved_at" in data:
+                continue  # reservation, not assignment -- handled elsewhere
+
+            # Determine reservation_id: stored as field (Claude) or is the filename (Codex)
+            res_id = data.get("reservation_id") or f.stem
+            lock_file = ASSIGNMENTS_DIR / f".lock_{res_id}"
+
+            if not lock_file.exists():
+                continue  # no lock = legacy session, let pressure cleanup handle it
+
+            # Try to delete the lock file -- succeeds only if owner process is dead
+            try:
+                lock_file.unlink()
+                log.debug("Dead session cleanup: evicting %s (owner dead)", f.name)
+                f.unlink(missing_ok=True)
+                _cleanup_session_artifacts(res_id)
+            except PermissionError:
+                pass  # Lock held open = owner alive
+            except OSError:
+                pass
+        except (json.JSONDecodeError, OSError):
+            pass
+
+
+def _cleanup_session_artifacts(res_id: str) -> None:
+    """Remove spinner state and lock files for a dead session."""
+    for prefix in (".spinner_", ".lock_"):
+        try:
+            (ASSIGNMENTS_DIR / f"{prefix}{res_id}").unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _get_assigned_files() -> set[str]:
     """Return set of sound filenames currently assigned to active sessions."""
     assigned = set()
@@ -283,6 +331,7 @@ def assign(session_id: str) -> None:
             if reserve_file.is_file():
                 choice = json.loads(reserve_file.read_text())
                 choice.pop("reserved_at", None)
+                choice["reservation_id"] = reservation_id  # spinner thread reads this key
                 # Atomic claim to prevent race with concurrent assign()
                 try:
                     fd = os.open(str(target), os.O_CREAT | os.O_EXCL | os.O_WRONLY)

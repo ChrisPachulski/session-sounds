@@ -38,10 +38,10 @@ CLAUDE_SPINNER_FRAMES = "\u2802\u2810"   # 2 alternating minimal dots (working s
 CLAUDE_IDLE_ICON = "\u2733"              # ✳ eight-spoked asterisk (idle/done state)
 CLAUDE_SPINNER_INTERVAL = 0.96           # 960ms per frame
 
-# Codex title animation -- 10-frame braille spinner
-# Source: Codex CLI Rust binary spinner
+# Codex title animation -- native title disabled in config.toml ([tui] terminal_title = []),
+# so our spinner is the sole writer. 10-frame braille at 80ms matches Codex's own style.
 CODEX_SPINNER_FRAMES = "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
-CODEX_IDLE_ICON = "\u2733"               # ✳ same idle icon for consistency
+CODEX_IDLE_ICON = "\u25cb"               # ○ open circle -- visually distinct from Claude's ✳
 CODEX_SPINNER_INTERVAL = 0.08            # 80ms per frame
 
 
@@ -94,6 +94,7 @@ def _spinner_thread(
 
     Claude: alternates "⠂ Title" / "⠐ Title" at 960ms, idle "✳ Title"
     Codex:  10-frame braille spinner at 80ms, idle "✳ Title"
+            (Codex's native title disabled via config.toml [tui] terminal_title = [])
     """
     if agent == "codex":
         frames, idle_icon, interval = CODEX_SPINNER_FRAMES, CODEX_IDLE_ICON, CODEX_SPINNER_INTERVAL
@@ -126,6 +127,7 @@ def _pick_sound() -> tuple[dict[str, str], str] | None:
         return None
 
     sound_manager.ASSIGNMENTS_DIR.mkdir(parents=True, exist_ok=True)
+    sound_manager._cleanup_dead_sessions()
     sound_manager._cleanup_if_pressured(pool)
     sound_manager._cleanup_orphaned_reservations()
 
@@ -299,14 +301,16 @@ def _codex_watcher(
                             continue
                         try:
                             event = json.loads(line)
-                            if (
-                                event.get("type") == "event_msg"
-                                and event.get("payload", {}).get("type")
-                                == "task_complete"
-                            ):
+                            payload_type = (
+                                event.get("payload", {}).get("type", "")
+                                if event.get("type") == "event_msg"
+                                else ""
+                            )
+                            if payload_type == "task_started":
+                                _write_spinner_state(session_id, "spin")
+                            elif payload_type == "task_complete":
                                 log.debug("watcher: task_complete -> play + idle")
                                 sound_manager.play(session_id, event="completion")
-                                # Signal spinner to idle (task done)
                                 _write_spinner_state(session_id, "idle")
                         except json.JSONDecodeError:
                             pass
@@ -380,8 +384,13 @@ def launch(agent: str, args: list[str]) -> int:
     # Claude: leave reservation for hooks to claim via assign()
     if agent == "codex":
         _claim_reservation(reservation_id)
-        # Codex starts working immediately -- set spinner to spin
         _write_spinner_state(reservation_id, "spin")
+
+    # Lock file for liveness detection -- held open for the entire session.
+    # On Windows, open files can't be deleted, so cleanup can probe liveness
+    # by attempting to unlink the lock file.
+    lock_file = sound_manager.ASSIGNMENTS_DIR / f".lock_{reservation_id}"
+    lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
 
     launch_epoch = time.time() - 2  # buffer for process startup latency
     cmd = _agent_cmd(agent, title, args)
@@ -393,6 +402,7 @@ def launch(agent: str, args: list[str]) -> int:
     rollout = None
 
     # Start spinner thread (runs for entire session, daemon=True)
+    # Claude: animated spinner at 960ms. Codex: static title reasserted at 3s.
     spinner_thread_ref = threading.Thread(
         target=_spinner_thread,
         args=(reservation_id, title, stop_event, agent),
@@ -434,6 +444,13 @@ def launch(agent: str, args: list[str]) -> int:
         # Clean up spinner state file
         try:
             _spinner_state_path(reservation_id).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+        # Release lock file (enables dead session detection by future launchers)
+        try:
+            os.close(lock_fd)
+            lock_file.unlink(missing_ok=True)
         except OSError:
             pass
 
