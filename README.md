@@ -49,12 +49,13 @@ cd session-sounds
 python install_claude_sounds.py
 ```
 
-The installer does four things:
+The installer does five things:
 
 1. Copies sound files and scripts to `~/.claude/sounds/`
 2. Adds hooks to `~/.claude/settings.json` (merged with your existing config)
 3. Adds `claude` and `codex` shell wrappers to your profile (PowerShell, bash, or zsh)
 4. Configures VS Code terminal tab titles (if VS Code is installed)
+5. Disables Codex's native title animation in `~/.codex/config.toml` (prevents title fight)
 
 Open a new terminal and type `claude`. That is it.
 
@@ -183,17 +184,31 @@ Claude Code supports [hooks](https://docs.anthropic.com/en/docs/claude-code/hook
 
 Hooks work for tab naming because they run as Claude Code subprocesses with PTY access -- even after the TUI takes over the terminal, hook processes can still write ANSI title sequences.
 
-### Codex: JSONL watcher
+### Codex: JSONL watcher + config
 
-On Windows, Codex has hooks disabled in its Rust binary (`cfg!(windows)`). The launcher compensates by spawning a watcher thread that:
+On Windows, Codex has hooks disabled in its Rust binary (`cfg!(windows)`). The launcher compensates with two mechanisms:
 
-1. Discovers the active rollout file via `~/.codex/state_5.sqlite`
-2. Tails the JSONL for `task_complete` events using `FindFirstChangeNotificationW` (Windows) or polling (elsewhere)
-3. Plays the assigned sound and refreshes the terminal title on each event
+1. **Title suppression**: The installer sets `terminal_title = []` in `~/.codex/config.toml`, disabling Codex's native title animation. Without this, Codex's 80ms title updates fight with the session-sounds spinner.
+2. **Watcher thread**: Discovers the active rollout file via `~/.codex/state_5.sqlite` or filesystem scan, then tails the JSONL for `task_started` and `task_complete` events using `FindFirstChangeNotificationW` (Windows) or polling (elsewhere).
+
+On `task_started`, the spinner activates. On `task_complete`, the sound plays and the spinner stops.
+
+### Tab title icons
+
+Each agent has a distinct idle icon so you can tell them apart at a glance:
+
+| Agent | Thinking | Idle |
+|-------|----------|------|
+| Claude | `⠂` / `⠐` alternating at 960ms | `✳ Sound Name` |
+| Codex | 10-frame braille spinner at 80ms | `○ Sound Name` |
 
 ### Sound deduplication
 
-Assignments are tracked as JSON files in `~/.claude/sounds/assignments/`. Each file maps a session ID to a sound. When a new session starts, only unassigned sounds are candidates. If all sounds are taken, the pool resets. Orphaned assignments (from crashed sessions) are reclaimed under pool pressure -- only when fewer than 5 sounds remain available.
+Assignments are tracked as JSON files in `~/.claude/sounds/assignments/`. Each file maps a session ID to a sound. When a new session starts, only unassigned sounds are candidates. If all sounds are taken, the pool resets.
+
+Orphan cleanup uses two mechanisms:
+1. **Lock-file liveness detection** (primary): each launcher holds a `.lock_{id}` file open for the session duration. On cleanup, if the lock file can be deleted, the owning process is dead and the assignment is evicted.
+2. **Pressure-based eviction** (backstop): when fewer than 5 sounds remain available, the oldest assignments by mtime are evicted first.
 
 ### Process detach
 

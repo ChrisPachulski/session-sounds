@@ -20,6 +20,7 @@ SOUNDS_SRC = SCRIPT_DIR / "sounds"
 SOUNDS_DST = Path.home() / ".claude" / "sounds"
 ASSIGNMENTS_DIR = SOUNDS_DST / "assignments"
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
+CODEX_CONFIG_PATH = Path.home() / ".codex" / "config.toml"
 GSD_STATUSLINE_PATH = Path.home() / ".claude" / "hooks" / "gsd-statusline.js"
 
 
@@ -109,6 +110,30 @@ def _hook_commands() -> dict:
             {"type": "command", "command": f'{sm} release', "timeout": 5},
         ]}],
     }
+
+
+def _configure_codex_title() -> None:
+    """Disable Codex's native terminal title so session-sounds controls it.
+
+    Adds [tui] terminal_title = [] to ~/.codex/config.toml, preserving
+    any existing config. Without this, Codex's built-in title animation
+    fights with the session-sounds spinner at high frequency.
+    """
+    CODEX_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if CODEX_CONFIG_PATH.is_file():
+        content = CODEX_CONFIG_PATH.read_text()
+        if "terminal_title" in content:
+            print("  Codex terminal_title already configured")
+            return
+        # Append [tui] section
+        if "[tui]" in content:
+            content = content.replace("[tui]", "[tui]\nterminal_title = []")
+        else:
+            content = content.rstrip() + "\n\n[tui]\nterminal_title = []\n"
+        CODEX_CONFIG_PATH.write_text(content)
+    else:
+        CODEX_CONFIG_PATH.write_text("[tui]\nterminal_title = []\n")
+    print("  Disabled Codex native title in ~/.codex/config.toml")
 
 
 def _launcher_path() -> str:
@@ -249,7 +274,10 @@ def install() -> None:
             print("  Existing statusLine found -- add sound_name manually or")
             print("  install GSD plugin for automatic integration")
 
-    # 6. Shell wrapper
+    # 6. Codex config -- disable native title animation
+    _configure_codex_title()
+
+    # 7. Shell wrapper
     print()
     if sys.platform == "win32":
         wrapper = _powershell_wrapper()
@@ -289,7 +317,7 @@ def install() -> None:
             print(f"  Add this to {rc}:")
             print(wrapper)
 
-    # 7. Summary
+    # 8. Summary
     print()
     print("Done! Open a new terminal and type 'claude'.")
     print()
