@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 assignments/*.json
 pending_pick.json
+
+# WAV files -- sounds are local-only, never committed
+# Exception: synthesized event defaults (events/*/default.wav) are tracked
+sounds/*.wav
+sounds/themes/**/*.wav
