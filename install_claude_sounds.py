@@ -100,21 +100,23 @@ def _hook_commands() -> dict:
     return {
         "SessionStart": [{"hooks": [
             {"type": "command", "command": f'{sm} assign', "timeout": 5},
-            {"type": "command", "command": th, "timeout": 5},
+            {"type": "command", "command": f'{th} SessionStart', "timeout": 5},
         ]}],
         "Stop": [{"hooks": [
             {"type": "command", "command": f'{sm} play completion', "async": True, "timeout": 10},
-            {"type": "command", "command": th, "timeout": 5},
+            {"type": "command", "command": f'{th} Stop', "timeout": 5},
         ]}],
         "Notification": [{"hooks": [
             {"type": "command", "command": f'{sm} play approval', "async": True, "timeout": 5},
         ]}],
         "StopFailure": [{"hooks": [
             {"type": "command", "command": f'{sm} play error', "async": True, "timeout": 5},
+            {"type": "command", "command": f'{th} StopFailure', "timeout": 5},
         ]}],
         "SessionEnd": [{"hooks": [
             {"type": "command", "command": f'{sm} play end', "async": True, "timeout": 5},
             {"type": "command", "command": f'{sm} release', "timeout": 5},
+            {"type": "command", "command": f'{th} SessionEnd', "timeout": 5},
         ]}],
     }
 
