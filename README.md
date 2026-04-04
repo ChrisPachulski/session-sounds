@@ -1,7 +1,7 @@
 # session-sounds
 
 <!-- Badges -->
-![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue?style=flat-square)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square)
 ![Platform: Windows | macOS | Linux](https://img.shields.io/badge/platform-windows%20%7C%20macos%20%7C%20linux-lightgrey?style=flat-square)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 ![Dependencies: zero](https://img.shields.io/badge/dependencies-zero-brightgreen?style=flat-square)
@@ -66,9 +66,20 @@ python install_claude_sounds.py uninstall
 python install_claude_sounds.py status
 ```
 
+### Quick reference
+
+| Want | Do |
+|---|---|
+| Disable everything | Set `SESSION_SOUNDS_DISABLED=1` in your environment |
+| Re-enable | Unset the variable |
+| Disable for one session | `SESSION_SOUNDS_DISABLED=1 claude` |
+| Switch to personal sounds | Set `SESSION_SOUNDS_THEME=personal` + add WAVs to `sounds/themes/personal/` |
+| Create a new theme | Create `sounds/themes/<name>/` with WAVs + `theme.json` |
+| Sounds + tab names | `claude` or `codex` -- just launch normally |
+
 ### Requirements
 
-- Python 3.9+
+- Python 3.10+
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://openai.com/index/introducing-codex/) on your PATH
 - Audio playback:
 
@@ -76,7 +87,7 @@ python install_claude_sounds.py status
 |---|---|---|
 | Windows | `winsound` | Built-in, nothing to install |
 | macOS | `afplay` | Built-in |
-| Linux | `paplay`, `pw-play`, or `aplay` | PulseAudio, PipeWire, or ALSA |
+| Linux | `paplay`, `pw-play`, or `aplay` | Auto-detected: PulseAudio, PipeWire, or ALSA |
 
 ---
 
@@ -95,7 +106,39 @@ For custom display names, add entries to the `_DISPLAY_NAMES` dictionary in `sou
 Sound file requirements:
 - WAV format (44100 Hz, mono, 16-bit PCM recommended)
 - Under 5 seconds
-- Peak volume under 50%
+- Normalize to comfortable volume -- synthesized tones peak around 30-45%, extracted clips may need higher peaks for equivalent perceived loudness
+
+### Sound themes
+
+session-sounds ships with a `default` theme and an empty `personal` theme.
+
+To use your own sounds, copy WAV files into `~/.claude/sounds/themes/personal/`, create a `theme.json` with display name mappings, and set:
+
+```bash
+export SESSION_SOUNDS_THEME=personal
+```
+
+**theme.json format:**
+
+```json
+{
+    "schema_version": 1,
+    "name": "Personal",
+    "description": "My custom sounds",
+    "author": "you",
+    "sounds": {
+        "filename_stem": "Display Name"
+    }
+}
+```
+
+Sounds not listed in the `sounds` dict auto-title from filename: `cool_cat.wav` becomes "Cool Cat".
+
+To disable all sounds temporarily:
+
+```bash
+export SESSION_SOUNDS_DISABLED=1
+```
 
 ### Sound packs
 
@@ -234,13 +277,25 @@ The installer sets this automatically. Works in iTerm2, Terminal.app, and Window
 ~/.claude/sounds/
   agent_launcher.py      # Entry point -- launches claude or codex
   sound_manager.py       # Sound pool, assignment, playback, event resolution
-  title_hook.py          # Claude hook for terminal title refresh
-  tool_context.py        # Command parser and error detection
+  pack_loader.py         # Pack discovery, validation, activation
+  native_pack_loader.py  # Platform-native system sound packs
+  pack_schema.json       # JSON Schema for pack.json manifests
+  terminal_title.py      # Per-terminal title setter (Win/Mac/Linux/tmux/kitty)
+  title_hook.py          # Claude hook for terminal title + spinner state
+  tool_context.py        # Command parser and error/outcome detection
   status_line.py         # Claude Code status bar integration
   assignments/           # Per-session assignment files (auto-managed)
-  events/                # Event-type sounds (error, approval, end)
-  packs/                 # Sound pack directories
+  events/                # Event-type default sounds
+    error/default.wav    # Two-note descending buzzy tone
+    approval/default.wav # Rising two-note chime
+    end/default.wav      # Soft descending fade
+  packs/                 # Sound pack directories + manifests
   *.wav                  # Sound files
+
+tools/                   # Authoring tools (not installed)
+  extract_clip.py        # Phrase-boundary-aware clip extractor
+  generate_event_sounds.py   # Regenerate default event sounds
+  generate_all_sounds.py     # Procedural synthesis reference
 ```
 
 </details>

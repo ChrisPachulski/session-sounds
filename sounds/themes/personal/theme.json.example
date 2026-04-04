@@ -1,0 +1,11 @@
+{
+    "schema_version": 1,
+    "name": "Personal",
+    "description": "My custom notification sounds",
+    "author": "you",
+    "sounds": {
+        "africa": "Africa",
+        "bond": "007",
+        "shire": "The Shire"
+    }
+}

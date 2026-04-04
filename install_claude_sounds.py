@@ -225,6 +225,16 @@ def install() -> None:
     wav_count = len(list(SOUNDS_DST.glob("*.wav")))
     print(f"  Installed {wav_count} sounds + scripts")
 
+    # Copy theme directories
+    themes_src = SOUNDS_SRC / "themes"
+    themes_dst = SOUNDS_DST / "themes"
+    if themes_src.is_dir():
+        for theme_dir in themes_src.iterdir():
+            if theme_dir.is_dir():
+                dst_theme = themes_dst / theme_dir.name
+                shutil.copytree(theme_dir, dst_theme, dirs_exist_ok=True)
+        print(f"  Copied themes to {themes_dst}")
+
     # 3. Merge hooks into settings.json
     settings: dict = {}
     if SETTINGS_PATH.is_file():
@@ -312,7 +322,7 @@ def install() -> None:
         rc = Path.home() / (".zshrc" if "zsh" in shell else ".bashrc")
         if rc.is_file():
             content = rc.read_text()
-            if "claude()" not in content:
+            if "claude()" not in content and "function claude" not in content:
                 with open(rc, "a") as f:
                     f.write("\n" + wrapper + "\n")
                 print(f"  Added claude/codex wrappers to {rc}")

@@ -1,0 +1,7 @@
+{
+    "schema_version": 1,
+    "name": "Default",
+    "description": "Built-in notification sounds (royalty-free)",
+    "author": "session-sounds",
+    "sounds": {}
+}

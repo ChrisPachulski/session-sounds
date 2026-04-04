@@ -25,6 +25,23 @@ ASSIGNMENTS_DIR = Path.home() / ".claude" / "sounds" / "assignments"
 EVENTS_DIR = SOUNDS_DIR / "events"
 PRESSURE_THRESHOLD = 5  # Only reclaim slots when fewer than this many available
 DEBUG_LOG = Path.home() / ".claude" / "sounds" / "debug.log"
+THEMES_DIR = SOUNDS_DIR / "themes"
+SESSION_SOUNDS_THEME = os.environ.get("SESSION_SOUNDS_THEME", "default")
+
+
+def _load_theme_config() -> dict:
+    """Load theme.json for the active theme. Returns empty dict on failure."""
+    theme_dir = THEMES_DIR / SESSION_SOUNDS_THEME
+    config_file = theme_dir / "theme.json"
+    if not config_file.is_file():
+        log.debug("_load_theme_config: no theme.json at %s", config_file)
+        return {}
+    try:
+        return json.loads(config_file.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        log.warning("_load_theme_config: failed to read %s: %s", config_file, exc)
+        return {}
+
 VALID_EVENTS = frozenset({"completion", "error", "approval", "start", "end"})
 
 # Production files only: no _a/_b/_c candidates, no src_ sources
@@ -70,7 +87,38 @@ log = logging.getLogger("sound_manager")
 
 
 def _load_pool() -> list[dict[str, str]]:
-    """Build sound pool from production .wav files in the sounds directory."""
+    """Build sound pool. Active pack takes priority; theme dir; legacy glob as fallback."""
+    # Priority 1: Pack system (if active)
+    try:
+        from pack_loader import load_pack_pool
+        pack_pool = load_pack_pool()
+        if pack_pool is not None:
+            log.debug("_load_pool: using pack pool (%d sounds)", len(pack_pool))
+            return pack_pool
+    except ImportError:
+        pass
+    except Exception as exc:
+        log.warning("_load_pool: pack_loader error: %s", exc)
+
+    # Priority 2: Theme directory WAVs
+    theme_config = _load_theme_config()
+    theme_names = theme_config.get("sounds", {})
+    theme_dir = THEMES_DIR / SESSION_SOUNDS_THEME
+
+    if theme_dir.is_dir():
+        wavs = sorted(theme_dir.glob("*.wav"))
+        if wavs:
+            pool = []
+            for wav in wavs:
+                if _CANDIDATE_RE.match(wav.stem):
+                    continue
+                name = theme_names.get(wav.stem, wav.stem.replace("_", " ").title())
+                pool.append({"file": str(wav), "name": name})
+            if pool:
+                log.debug("_load_pool: theme '%s' (%d sounds)", SESSION_SOUNDS_THEME, len(pool))
+                return pool
+
+    # Priority 3: Legacy -- loose WAVs in SOUNDS_DIR
     pool = []
     for wav in sorted(SOUNDS_DIR.glob("*.wav")):
         if _CANDIDATE_RE.match(wav.stem):
@@ -229,16 +277,27 @@ def _resolve_event_sound(primary_file: str, event: str) -> Path | None:
     For others: returns event sound or primary as fallback.
 
     Resolution: per-sound variant -> universal default -> fallback.
+    Handles both relative filenames (legacy pool) and absolute paths (pack system).
     """
-    primary_path = SOUNDS_DIR / primary_file
+    primary_path = Path(primary_file)
+    if not primary_path.is_absolute():
+        primary_path = SOUNDS_DIR / primary_file
 
     if event in ("completion", "start"):
         return primary_path
 
-    # Tier 1: per-sound event variant
-    variant = EVENTS_DIR / event / primary_file
+    # Tier 0: theme-specific event variant
+    primary_wav_name = Path(primary_file).name  # e.g. "africa.wav" regardless of abs/rel
+    theme_events = THEMES_DIR / SESSION_SOUNDS_THEME / "events" / event
+    variant = theme_events / primary_wav_name
     if variant.is_file():
         return variant
+
+    # Tier 1: per-sound event variant (only for relative/legacy sounds)
+    if not Path(primary_file).is_absolute():
+        variant = EVENTS_DIR / event / primary_file
+        if variant.is_file():
+            return variant
 
     # Tier 2: universal event default
     default = EVENTS_DIR / event / "default.wav"
@@ -251,8 +310,31 @@ def _resolve_event_sound(primary_file: str, event: str) -> Path | None:
     return primary_path  # error/approval fall back to primary
 
 
+_linux_play_cmd: list[str] | None = None
+_linux_play_detected: bool = False
+
+
+def _detect_linux_player() -> list[str] | None:
+    """Detect the best audio player on Linux. Cached after first call."""
+    global _linux_play_cmd, _linux_play_detected
+    if _linux_play_detected:
+        return _linux_play_cmd
+    _linux_play_detected = True
+    try:
+        from native_pack_loader import detect_playback_command
+        _linux_play_cmd = detect_playback_command()
+    except ImportError:
+        import shutil
+        for candidate in ("paplay", "pw-play", "ogg123", "ffplay", "aplay"):
+            if shutil.which(candidate):
+                _linux_play_cmd = [candidate]
+                break
+    log.debug("Linux playback command: %s", _linux_play_cmd)
+    return _linux_play_cmd
+
+
 def _play_sound(wav_path: Path) -> None:
-    """Play a WAV file using the platform's native audio player."""
+    """Play a sound file using the platform's native audio player."""
     if sys.platform == "win32":
         import winsound
         winsound.PlaySound(str(wav_path), winsound.SND_FILENAME)
@@ -262,8 +344,15 @@ def _play_sound(wav_path: Path) -> None:
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
         )
     else:
+        play_cmd = _detect_linux_player()
+        if play_cmd is None:
+            log.warning("play: no Linux audio player found")
+            return
+        cmd = list(play_cmd) + [str(wav_path)]
+        if play_cmd[0] == "aplay" and "-q" not in play_cmd:
+            cmd = ["aplay", "-q", str(wav_path)]
         subprocess.run(
-            ["aplay", "-q", str(wav_path)],
+            cmd,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
         )
 
@@ -345,11 +434,17 @@ def assign(session_id: str) -> None:
     ASSIGNMENTS_DIR.mkdir(parents=True, exist_ok=True)
 
     target = ASSIGNMENTS_DIR / f"{session_id}.json"
+    choice = None
     if target.is_file():
-        choice = json.loads(target.read_text())
-        log.debug("assign: reusing existing %s", choice["name"])
-    else:
-        choice = None
+        try:
+            choice = json.loads(target.read_text())
+        except (json.JSONDecodeError, OSError) as exc:
+            log.warning("assign: corrupt assignment %s: %s", target.name, exc)
+            target.unlink(missing_ok=True)
+            choice = None
+        if choice is not None:
+            log.debug("assign: reusing existing %s", choice["name"])
+    if choice is None:
 
         # Path 1: Claim reservation written by pick()
         reservation_id = os.environ.get("CLAUDE_SOUND_RESERVATION", "")
@@ -452,7 +547,23 @@ def play(session_id: str, event: str = "completion") -> None:
         assignment_file.write_text(json.dumps(choice))
         log.debug("play: auto-assigned %s -> %s", session_id, choice["name"])
 
-    choice = json.loads(assignment_file.read_text())
+    try:
+        choice = json.loads(assignment_file.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        log.warning("play: corrupt assignment %s: %s, re-assigning", assignment_file.name, exc)
+        assignment_file.unlink(missing_ok=True)
+        pool = _load_pool()
+        if not pool:
+            log.debug("play: re-assign failed, empty pool")
+            return
+        ASSIGNMENTS_DIR.mkdir(parents=True, exist_ok=True)
+        assigned = _get_assigned_files()
+        available = [s for s in pool if s["file"] not in assigned]
+        if not available:
+            available = pool
+        choice = random.choice(available)
+        assignment_file.write_text(json.dumps(choice))
+        log.debug("play: re-assigned %s -> %s", session_id, choice["name"])
     wav_path = _resolve_event_sound(choice["file"], event)
     if wav_path is None:
         log.debug("play: event %s resolved to silence", event)
@@ -479,6 +590,10 @@ def release(session_id: str) -> None:
 
 
 if __name__ == "__main__":
+    # Kill switch: when set, skip all hook actions (assign/play/release).
+    # Detached _play_file children inherit this var, so they also exit early.
+    if os.environ.get("SESSION_SOUNDS_DISABLED"):
+        sys.exit(0)
     action = sys.argv[1] if len(sys.argv) > 1 else ""
 
     if action == "pick":
@@ -494,7 +609,8 @@ if __name__ == "__main__":
         if title:
             entry = _find_sound_by_name(title)
             if entry:
-                wav_path = SOUNDS_DIR / entry["file"]
+                p = Path(entry["file"])
+                wav_path = p if p.is_absolute() else SOUNDS_DIR / entry["file"]
                 if wav_path.is_file():
                     _play_sound(wav_path)
                     log.debug("play-startup: played %s", title)
