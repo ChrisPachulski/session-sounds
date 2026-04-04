@@ -87,9 +87,15 @@ def _patch_gsd_statusline() -> bool:
     return True
 
 
+def _python_cmd() -> str:
+    """Return 'python3' on Unix (macOS/Linux ship python3), 'python' on Windows."""
+    return "python" if sys.platform == "win32" else "python3"
+
+
 def _hook_commands() -> dict:
-    sm = f'python "{_sounds_path()}/sound_manager.py"'
-    th = f'python "{_sounds_path()}/title_hook.py"'
+    py = _python_cmd()
+    sm = f'{py} "{_sounds_path()}/sound_manager.py"'
+    th = f'{py} "{_sounds_path()}/title_hook.py"'
     return {
         "SessionStart": [{"hooks": [
             {"type": "command", "command": f'{sm} assign', "timeout": 5},
