@@ -369,6 +369,13 @@ def launch(agent: str, args: list[str]) -> int:
     os.environ["CLAUDE_SOUND_RESERVATION"] = reservation_id
     os.environ["SESSION_SOUND_HOST"] = agent
 
+    # Ghostty: disable shell integration title-setting so our spinner owns the title.
+    # Without this, Ghostty's shell integration overwrites the title on every prompt.
+    # User can undo: add 'shell-integration-features = no-title' to Ghostty config
+    # or unset GHOSTTY_SHELL_INTEGRATION_NO_TITLE in their shell profile.
+    if os.environ.get("TERM_PROGRAM", "").lower() == "ghostty":
+        os.environ["GHOSTTY_SHELL_INTEGRATION_NO_TITLE"] = "1"
+
     # Disable Claude's built-in title animation -- we handle it ourselves
     # This prevents the startup title fight where Claude overwrites our name
     # Fixed in Claude Code v2.1.79+. Known bug: clears title on exit (#31581)

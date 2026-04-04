@@ -338,7 +338,23 @@ def install() -> None:
     # 6a. macOS Terminal.app -- show escape-set titles instead of process name
     _configure_apple_terminal()
 
-    # 6b. Codex config -- disable native title animation
+    # 6b. Ghostty -- inform user about automatic shell integration override
+    if os.environ.get("TERM_PROGRAM", "").lower() == "ghostty":
+        print("  Ghostty detected: session-sounds will automatically disable Ghostty's")
+        print("  title-setting shell integration so the sound name stays in the tab.")
+        print("  To undo: unset GHOSTTY_SHELL_INTEGRATION_NO_TITLE in your shell profile,")
+        print("  or add 'shell-integration-features = no-title' to your Ghostty config")
+        print("  to make it permanent without the env var.")
+
+    # 6c. PyCharm/JetBrains -- manual step required
+    if os.environ.get("TERMINAL_EMULATOR", "") == "JetBrains-JediTerm":
+        print()
+        print("  JetBrains IDE detected: terminal tab titles require a manual setting.")
+        print("  Go to: Settings > Advanced Settings > Terminal")
+        print("  Enable: 'Show application title'")
+        print("  Without this, sound names won't appear in terminal tabs.")
+
+    # 6d. Codex config -- disable native title animation
     _configure_codex_title()
 
     # 7. Shell wrapper

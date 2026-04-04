@@ -35,6 +35,10 @@ def _detect_terminal() -> str:
         return "wezterm"
     if "apple_terminal" in term:
         return "apple-terminal"
+    if "ghostty" in term:
+        return "ghostty"
+    if os.environ.get("TERMINAL_EMULATOR", "") == "JetBrains-JediTerm":
+        return "jetbrains"
     if os.environ.get("WT_SESSION"):
         return "windows-terminal"
     if sys.platform == "win32":
@@ -134,6 +138,20 @@ def _title_apple_terminal(title: str) -> None:
     _write_to_devtty(seq)
 
 
+def _title_jetbrains(title: str) -> None:
+    """JetBrains IDE terminal (PyCharm, IntelliJ, etc.): OSC 0 via /dev/tty.
+
+    Requires: Settings > Advanced Settings > Terminal > 'Show application title' enabled.
+    This setting is OFF by default -- titles are accepted but not displayed without it.
+    """
+    _write_osc_devtty(title)
+
+
+def _title_ghostty(title: str) -> None:
+    """Ghostty: OSC 0 via /dev/tty (OSC 1 not supported, rejected in #1026)."""
+    _write_osc_devtty(title)
+
+
 def _title_generic(title: str) -> None:
     """Generic Unix: /dev/tty OSC 0 (primary) + stderr OSC 0 (fallback)."""
     _write_osc_devtty(title)
@@ -190,6 +208,8 @@ _DISPATCH = {
     "iterm2": _title_iterm2,
     "tmux": _title_tmux,
     "apple-terminal": _title_apple_terminal,
+    "jetbrains": _title_jetbrains,
+    "ghostty": _title_ghostty,
     "generic": _title_generic,
 }
 
