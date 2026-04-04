@@ -165,6 +165,32 @@ claude() {{ python3 "{launcher}" claude "$@"; }}
 codex() {{ python3 "{launcher}" codex "$@"; }}'''
 
 
+def _configure_apple_terminal() -> bool:
+    """Configure macOS Terminal.app to show escape-set titles instead of process name.
+
+    Sets the 'Window Settings' for the default profile to show the icon name
+    (set by OSC 1) as the tab title, rather than the active process name.
+    """
+    if sys.platform != "darwin":
+        return False
+    term_program = os.environ.get("TERM_PROGRAM", "")
+    if "Apple_Terminal" not in term_program:
+        return False
+    try:
+        # Tell Terminal.app to use the window/icon title (set by escape sequences)
+        # instead of the running process name for tab labels
+        subprocess.run(
+            ["defaults", "write", "com.apple.Terminal", "ShowActiveProcessArgumentsInTabTitle", "-bool", "false"],
+            check=True, capture_output=True, timeout=5,
+        )
+        print("  Configured Terminal.app to show session sound names in tabs")
+        print("  (restart Terminal.app for this to take effect)")
+        return True
+    except Exception as e:
+        print(f"  Warning: could not configure Terminal.app: {e}")
+        return False
+
+
 def _update_vscode_settings() -> bool:
     paths = [
         Path.home() / "AppData" / "Roaming" / "Code" / "User" / "settings.json",
@@ -308,7 +334,10 @@ def install() -> None:
             print("  Existing statusLine found -- add sound_name manually or")
             print("  install GSD plugin for automatic integration")
 
-    # 6. Codex config -- disable native title animation
+    # 6a. macOS Terminal.app -- show escape-set titles instead of process name
+    _configure_apple_terminal()
+
+    # 6b. Codex config -- disable native title animation
     _configure_codex_title()
 
     # 7. Shell wrapper

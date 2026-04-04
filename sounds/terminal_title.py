@@ -33,6 +33,8 @@ def _detect_terminal() -> str:
         return "iterm2"
     if "wezterm" in term:
         return "wezterm"
+    if "apple_terminal" in term:
+        return "apple-terminal"
     if os.environ.get("WT_SESSION"):
         return "windows-terminal"
     if sys.platform == "win32":
@@ -121,6 +123,17 @@ def _title_tmux(title: str) -> None:
     _write_to_devtty(dcs)
 
 
+def _title_apple_terminal(title: str) -> None:
+    """macOS Terminal.app: OSC 1 (icon/tab name) + OSC 2 (window title).
+
+    Terminal.app overwrites tab titles with the active process name by default.
+    Setting OSC 1 (icon name) separately forces Terminal.app to show our title
+    as the tab label. OSC 2 sets the window title without affecting the tab.
+    """
+    seq = f"\033]1;{title}\007\033]2;{title}\007"
+    _write_to_devtty(seq)
+
+
 def _title_generic(title: str) -> None:
     """Generic Unix: /dev/tty OSC 0 (primary) + stderr OSC 0 (fallback)."""
     _write_osc_devtty(title)
@@ -176,6 +189,7 @@ _DISPATCH = {
     "wezterm": _title_wezterm,
     "iterm2": _title_iterm2,
     "tmux": _title_tmux,
+    "apple-terminal": _title_apple_terminal,
     "generic": _title_generic,
 }
 
