@@ -26,20 +26,34 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent
-CLAUDE_SKILL = REPO_ROOT / ".claude" / "skills" / "session-sounds" / "SKILL.md"
-CODEX_SKILL = REPO_ROOT / ".codex" / "skills" / "session-sounds" / "SKILL.md"
 
-# Sections that MUST be identical between Claude and Codex SKILL.md files.
-# These are the shared functional sections -- runtime-specific sections are
-# expected to differ and are excluded from comparison.
-SHARED_SECTIONS = [
-    "Sound Pool & Assignment",
-    "Packs & Themes",
-    "Personal Sound Customization",
-    "Gitignore Rules",
-    "File Inventory (After Install)",
-    "Terminal Title Dispatch",
+# Skill pairs: each entry is (claude_path, codex_path, shared_sections).
+# shared_sections=None means the files must be fully identical (no runtime-specific parts).
+SKILL_PAIRS: list[tuple[Path, Path, list[str] | None]] = [
+    (
+        REPO_ROOT / ".claude" / "skills" / "session-sounds" / "SKILL.md",
+        REPO_ROOT / ".codex" / "skills" / "session-sounds" / "SKILL.md",
+        # Shared functional sections -- runtime-specific sections are expected to differ
+        [
+            "Sound Pool & Assignment",
+            "Packs & Themes",
+            "Personal Sound Customization",
+            "Gitignore Rules",
+            "File Inventory (After Install)",
+            "Terminal Title Dispatch",
+        ],
+    ),
+    (
+        REPO_ROOT / ".claude" / "skills" / "sound-authoring" / "SKILL.md",
+        REPO_ROOT / ".codex" / "skills" / "sound-authoring" / "SKILL.md",
+        None,  # Fully identical -- no runtime-specific content
+    ),
 ]
+
+# Legacy aliases for backward compat
+CLAUDE_SKILL = SKILL_PAIRS[0][0]
+CODEX_SKILL = SKILL_PAIRS[0][1]
+SHARED_SECTIONS = SKILL_PAIRS[0][2]
 
 
 def _extract_sections(text: str) -> dict[str, str]:
@@ -59,20 +73,51 @@ def _extract_sections(text: str) -> dict[str, str]:
     return sections
 
 
-def check_drift() -> list[str]:
-    """Compare shared sections. Returns list of section names that differ."""
-    if not CLAUDE_SKILL.is_file():
-        print(f"ERROR: Claude skill not found: {CLAUDE_SKILL}")
+def _check_full_file(claude_path: Path, codex_path: Path, label: str) -> list[str]:
+    """Check that two files are fully identical (for skills with no runtime-specific parts)."""
+    if not claude_path.is_file():
+        print(f"  ERROR: Claude skill not found: {claude_path}")
+        return [f"{label}: (claude missing)"]
+    if not codex_path.is_file():
+        print(f"  ERROR: Codex skill not found: {codex_path}")
+        return [f"{label}: (codex missing)"]
+
+    claude_text = claude_path.read_text(encoding="utf-8").strip()
+    codex_text = codex_path.read_text(encoding="utf-8").strip()
+
+    if claude_text != codex_text:
+        # Find first differing line
+        cl = claude_text.splitlines()
+        cx = codex_text.splitlines()
+        for j, (a, b) in enumerate(zip(cl, cx)):
+            if a != b:
+                print(f"  DRIFT in {label} (line {j + 1}):")
+                print(f"    Claude: {a[:80]}")
+                print(f"    Codex:  {b[:80]}")
+                break
+        else:
+            longer = "Claude" if len(cl) > len(cx) else "Codex"
+            print(f"  DRIFT in {label}: {longer} has extra lines")
+        return [f"{label}: files differ"]
+    return []
+
+
+def _check_sections(
+    claude_path: Path, codex_path: Path, sections: list[str],
+) -> list[str]:
+    """Check that specific H2 sections match between two files."""
+    if not claude_path.is_file():
+        print(f"  ERROR: Claude skill not found: {claude_path}")
         return ["(claude skill missing)"]
-    if not CODEX_SKILL.is_file():
-        print(f"ERROR: Codex skill not found: {CODEX_SKILL}")
+    if not codex_path.is_file():
+        print(f"  ERROR: Codex skill not found: {codex_path}")
         return ["(codex skill missing)"]
 
-    claude_sections = _extract_sections(CLAUDE_SKILL.read_text(encoding="utf-8"))
-    codex_sections = _extract_sections(CODEX_SKILL.read_text(encoding="utf-8"))
+    claude_sections = _extract_sections(claude_path.read_text(encoding="utf-8"))
+    codex_sections = _extract_sections(codex_path.read_text(encoding="utf-8"))
 
     drifted: list[str] = []
-    for section in SHARED_SECTIONS:
+    for section in sections:
         claude_content = claude_sections.get(section, "")
         codex_content = codex_sections.get(section, "")
 
@@ -83,7 +128,6 @@ def check_drift() -> list[str]:
             elif not codex_content:
                 print(f"  MISSING in Codex:  ## {section}")
             else:
-                # Show first differing line
                 cl = claude_content.splitlines()
                 cx = codex_content.splitlines()
                 for j, (a, b) in enumerate(zip(cl, cx)):
@@ -95,26 +139,52 @@ def check_drift() -> list[str]:
                 else:
                     longer = "Claude" if len(cl) > len(cx) else "Codex"
                     print(f"  DRIFT in ## {section}: {longer} has extra lines")
-
     return drifted
 
 
-def fix_drift() -> int:
-    """Copy shared sections from Claude SKILL.md to Codex SKILL.md."""
-    if not CLAUDE_SKILL.is_file() or not CODEX_SKILL.is_file():
-        print("ERROR: Both skill files must exist before --fix can run.")
-        return 1
+def check_drift() -> list[str]:
+    """Check all skill pairs. Returns list of drift descriptions."""
+    all_drifted: list[str] = []
+    for claude_path, codex_path, sections in SKILL_PAIRS:
+        label = claude_path.parent.name
+        if sections is None:
+            all_drifted.extend(_check_full_file(claude_path, codex_path, label))
+        else:
+            all_drifted.extend(_check_sections(claude_path, codex_path, sections))
+    return all_drifted
 
-    claude_sections = _extract_sections(CLAUDE_SKILL.read_text(encoding="utf-8"))
-    codex_text = CODEX_SKILL.read_text(encoding="utf-8")
+
+def _fix_full_file(claude_path: Path, codex_path: Path, label: str) -> int:
+    """Fix by copying Claude file to Codex (for fully-identical skills)."""
+    if not claude_path.is_file():
+        print(f"  ERROR: Claude skill not found: {claude_path}")
+        return 0
+    claude_text = claude_path.read_text(encoding="utf-8")
+    codex_text = codex_path.read_text(encoding="utf-8") if codex_path.is_file() else ""
+    if claude_text.strip() != codex_text.strip():
+        codex_path.parent.mkdir(parents=True, exist_ok=True)
+        codex_path.write_text(claude_text, encoding="utf-8")
+        print(f"  FIXED: {label} (full file copy)")
+        return 1
+    return 0
+
+
+def _fix_sections(
+    claude_path: Path, codex_path: Path, sections: list[str],
+) -> int:
+    """Fix by copying shared sections from Claude to Codex."""
+    if not claude_path.is_file() or not codex_path.is_file():
+        print("  ERROR: Both skill files must exist before --fix can run.")
+        return 0
+
+    claude_sections = _extract_sections(claude_path.read_text(encoding="utf-8"))
+    codex_text = codex_path.read_text(encoding="utf-8")
 
     fixed = 0
-    for section in SHARED_SECTIONS:
+    for section in sections:
         claude_content = claude_sections.get(section, "")
         if not claude_content:
             continue
-
-        # Replace the section in Codex text
         pattern = re.compile(
             rf"(^## {re.escape(section)}\s*$)(.*?)(?=^## |\Z)",
             re.MULTILINE | re.DOTALL,
@@ -123,7 +193,6 @@ def fix_drift() -> int:
         if match:
             old_content = match.group(2).strip()
             if old_content != claude_content:
-                # Reconstruct with consistent spacing: \n\n before content, \n\n after
                 replacement = f"\n\n{claude_content}\n\n"
                 codex_text = codex_text[:match.start(2)] + replacement + codex_text[match.end(2):]
                 fixed += 1
@@ -132,8 +201,22 @@ def fix_drift() -> int:
             print(f"  WARNING: ## {section} not found in Codex skill -- add manually")
 
     if fixed:
-        CODEX_SKILL.write_text(codex_text, encoding="utf-8")
-        print(f"\nFixed {fixed} section(s). Codex skill updated.")
+        codex_path.write_text(codex_text, encoding="utf-8")
+    return fixed
+
+
+def fix_drift() -> int:
+    """Fix all skill pairs. Returns 0 on success."""
+    total_fixed = 0
+    for claude_path, codex_path, sections in SKILL_PAIRS:
+        label = claude_path.parent.name
+        if sections is None:
+            total_fixed += _fix_full_file(claude_path, codex_path, label)
+        else:
+            total_fixed += _fix_sections(claude_path, codex_path, sections)
+
+    if total_fixed:
+        print(f"\nFixed {total_fixed} item(s).")
     else:
         print("\nNo fixes needed.")
     return 0
@@ -145,14 +228,14 @@ if __name__ == "__main__":
     if do_fix:
         sys.exit(fix_drift())
     else:
-        print("Checking Claude/Codex SKILL.md alignment...")
+        print("Checking Claude/Codex skill alignment...")
         drifted = check_drift()
         if drifted:
-            print(f"\n{len(drifted)} shared section(s) have drifted:")
+            print(f"\n{len(drifted)} item(s) have drifted:")
             for s in drifted:
                 print(f"  - {s}")
             print("\nRun 'python tools/sync_skills.py --fix' to sync Codex from Claude.")
             sys.exit(1)
         else:
-            print("All shared sections are aligned.")
+            print("All skills are aligned.")
             sys.exit(0)

@@ -25,10 +25,21 @@ CODEX_CONFIG_PATH = Path.home() / ".codex" / "config.toml"
 GSD_STATUSLINE_PATH = Path.home() / ".claude" / "hooks" / "gsd-statusline.js"
 
 # Skill sources (ship with repo so Claude/Codex know what session-sounds is)
-CLAUDE_SKILL_SRC = SCRIPT_DIR / ".claude" / "skills" / "session-sounds" / "SKILL.md"
-CODEX_SKILL_SRC = SCRIPT_DIR / ".codex" / "skills" / "session-sounds" / "SKILL.md"
-CLAUDE_SKILL_DST = Path.home() / ".claude" / "skills" / "session-sounds" / "SKILL.md"
-CODEX_SKILL_DST = Path.home() / ".codex" / "skills" / "session-sounds" / "SKILL.md"
+# Each tuple: (repo_source_dir, install_target_dir)
+_SKILL_PAIRS: list[tuple[str, str]] = [
+    ("session-sounds", "session-sounds"),
+    ("sound-authoring", "sound-authoring"),
+]
+
+def _skill_paths() -> list[tuple[Path, Path]]:
+    """Build (src, dst) pairs for all skills across both runtimes."""
+    pairs: list[tuple[Path, Path]] = []
+    for skill_name, dst_name in _SKILL_PAIRS:
+        for runtime, home_dir in [(".claude", ".claude"), (".codex", ".codex")]:
+            src = SCRIPT_DIR / runtime / "skills" / skill_name / "SKILL.md"
+            dst = Path.home() / home_dir / "skills" / dst_name / "SKILL.md"
+            pairs.append((src, dst))
+    return pairs
 
 
 def _sounds_path() -> str:
@@ -277,18 +288,14 @@ def install() -> None:
         print(f"  Copied themes to {themes_dst}")
 
     # Copy skills so Claude/Codex know what session-sounds is
-    for src, dst in [(CLAUDE_SKILL_SRC, CLAUDE_SKILL_DST),
-                     (CODEX_SKILL_SRC, CODEX_SKILL_DST)]:
+    skill_count = 0
+    for src, dst in _skill_paths():
         if src.is_file():
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
-    skills_installed = []
-    if CLAUDE_SKILL_DST.is_file():
-        skills_installed.append("Claude")
-    if CODEX_SKILL_DST.is_file():
-        skills_installed.append("Codex")
-    if skills_installed:
-        print(f"  Installed skills for: {', '.join(skills_installed)}")
+            skill_count += 1
+    if skill_count:
+        print(f"  Installed {skill_count} skill files (Claude + Codex)")
 
     # Write session-sounds config (preserves existing settings, adds defaults)
     config_file = SOUNDS_DST / "config.json"
@@ -467,15 +474,14 @@ def uninstall() -> None:
             print(f"  Warning: could not update settings.json: {e}")
 
     # 2. Remove installed skills
-    for skill_path in (CLAUDE_SKILL_DST, CODEX_SKILL_DST):
-        if skill_path.is_file():
-            skill_path.unlink()
-            # Remove parent dir if empty
+    for _, dst in _skill_paths():
+        if dst.is_file():
+            dst.unlink()
             try:
-                skill_path.parent.rmdir()
+                dst.parent.rmdir()
             except OSError:
                 pass
-            print(f"  Removed {skill_path}")
+            print(f"  Removed {dst}")
 
     # 3. Note about shell wrappers and sounds directory
     print()
