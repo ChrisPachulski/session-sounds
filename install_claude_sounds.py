@@ -106,8 +106,12 @@ def _patch_gsd_statusline() -> bool:
 
 
 def _python_cmd() -> str:
-    """Return 'python3' on Unix (macOS/Linux ship python3), 'python' on Windows."""
-    return "python" if sys.platform == "win32" else "python3"
+    """Resolve the absolute path to the Python interpreter running this script.
+
+    Using sys.executable ensures hooks call the same Python that ran the
+    installer, regardless of PATH, venv, or platform naming (python vs python3).
+    """
+    return str(Path(sys.executable).resolve())
 
 
 def _hook_commands() -> dict:
@@ -172,17 +176,19 @@ def _launcher_path() -> str:
 
 
 def _powershell_wrapper() -> str:
+    py = _python_cmd().replace("/", "\\")
     launcher = str(SOUNDS_DST / "agent_launcher.py").replace("/", "\\")
     return f'''
-function claude {{ python "{launcher}" claude @args }}
-function codex {{ python "{launcher}" codex @args }}'''
+function claude {{ & "{py}" "{launcher}" claude @args }}
+function codex {{ & "{py}" "{launcher}" codex @args }}'''
 
 
 def _bash_wrapper() -> str:
+    py = _python_cmd()
     launcher = SOUNDS_DST / "agent_launcher.py"
     return f'''
-claude() {{ python3 "{launcher}" claude "$@"; }}
-codex() {{ python3 "{launcher}" codex "$@"; }}'''
+claude() {{ "{py}" "{launcher}" claude "$@"; }}
+codex() {{ "{py}" "{launcher}" codex "$@"; }}'''
 
 
 def _configure_apple_terminal() -> bool:
