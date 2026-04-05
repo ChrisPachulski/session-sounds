@@ -140,6 +140,68 @@ To disable all sounds temporarily:
 export SESSION_SOUNDS_DISABLED=1
 ```
 
+### Creating a personal theme from YouTube
+
+session-sounds ships with authoring tools in `tools/` and AI skills in `.claude/skills/` and `.codex/skills/` so Claude Code or Codex can walk you through the process. But here is the manual workflow:
+
+**1. Download the source audio**
+
+```bash
+yt-dlp -x -o "source.%(ext)s" "https://youtube.com/watch?v=VIDEO_ID"
+```
+
+**2. Convert the full file to WAV (do NOT seek into webm -- it produces silence)**
+
+```bash
+ffmpeg -y -i source.webm -ar 44100 -ac 1 source_full.wav
+```
+
+**3. Extract phrase-aligned candidates**
+
+```bash
+python tools/extract_clip.py source_full.wav 10 20 my_sound.wav --candidates 3 --boost 4
+```
+
+This analyzes the waveform energy envelope and snaps cuts to natural phrase boundaries instead of arbitrary timestamps. It produces `my_sound_a.wav`, `my_sound_b.wav`, `my_sound_c.wav` for you to audition.
+
+**4. Pick the best clip and move it to your personal theme**
+
+```bash
+cp my_sound_a.wav ~/.claude/sounds/themes/personal/my_sound.wav
+```
+
+**5. Optionally register a custom display name**
+
+Create or edit `~/.claude/sounds/themes/personal/theme.json`:
+
+```json
+{
+    "schema_version": 1,
+    "name": "Personal",
+    "description": "My custom sounds",
+    "author": "you",
+    "sounds": {
+        "my_sound": "My Custom Sound"
+    }
+}
+```
+
+**6. Activate your personal theme**
+
+```bash
+export SESSION_SOUNDS_THEME=personal
+```
+
+Or set it permanently in `~/.claude/sounds/config.json`:
+
+```json
+{"enabled": true, "theme": "personal"}
+```
+
+Personal theme WAV files are gitignored and never leave your machine.
+
+**Sound requirements:** WAV, 44100 Hz, mono, 16-bit PCM, under 5 seconds. Sparse/staccato sounds (keyboard stabs, clicks) need full-scale peak (32767) for audibility. Continuous sounds should peak around 16383.
+
 ### Sound packs
 
 Sound packs are directories under `~/.claude/sounds/packs/` with a `pack.json` manifest:
