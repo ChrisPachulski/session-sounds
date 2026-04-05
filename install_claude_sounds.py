@@ -24,6 +24,12 @@ SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 CODEX_CONFIG_PATH = Path.home() / ".codex" / "config.toml"
 GSD_STATUSLINE_PATH = Path.home() / ".claude" / "hooks" / "gsd-statusline.js"
 
+# Skill sources (ship with repo so Claude/Codex know what session-sounds is)
+CLAUDE_SKILL_SRC = SCRIPT_DIR / ".claude" / "skills" / "session-sounds" / "SKILL.md"
+CODEX_SKILL_SRC = SCRIPT_DIR / ".codex" / "skills" / "session-sounds" / "SKILL.md"
+CLAUDE_SKILL_DST = Path.home() / ".claude" / "skills" / "session-sounds" / "SKILL.md"
+CODEX_SKILL_DST = Path.home() / ".codex" / "skills" / "session-sounds" / "SKILL.md"
+
 
 def _sounds_path() -> str:
     return str(SOUNDS_DST).replace("\\", "/")
@@ -270,6 +276,20 @@ def install() -> None:
                 shutil.copytree(theme_dir, dst_theme, dirs_exist_ok=True)
         print(f"  Copied themes to {themes_dst}")
 
+    # Copy skills so Claude/Codex know what session-sounds is
+    for src, dst in [(CLAUDE_SKILL_SRC, CLAUDE_SKILL_DST),
+                     (CODEX_SKILL_SRC, CODEX_SKILL_DST)]:
+        if src.is_file():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+    skills_installed = []
+    if CLAUDE_SKILL_DST.is_file():
+        skills_installed.append("Claude")
+    if CODEX_SKILL_DST.is_file():
+        skills_installed.append("Codex")
+    if skills_installed:
+        print(f"  Installed skills for: {', '.join(skills_installed)}")
+
     # Write session-sounds config (preserves existing settings, adds defaults)
     config_file = SOUNDS_DST / "config.json"
     config: dict = {}
@@ -446,7 +466,18 @@ def uninstall() -> None:
         except Exception as e:
             print(f"  Warning: could not update settings.json: {e}")
 
-    # 2. Note about shell wrappers and sounds directory
+    # 2. Remove installed skills
+    for skill_path in (CLAUDE_SKILL_DST, CODEX_SKILL_DST):
+        if skill_path.is_file():
+            skill_path.unlink()
+            # Remove parent dir if empty
+            try:
+                skill_path.parent.rmdir()
+            except OSError:
+                pass
+            print(f"  Removed {skill_path}")
+
+    # 3. Note about shell wrappers and sounds directory
     print()
     print("Manual steps remaining:")
     print(f"  1. Remove claude/codex functions from your shell profile")
