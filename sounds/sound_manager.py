@@ -575,7 +575,7 @@ if __name__ == "__main__":
     else:
         try:
             raw = sys.stdin.read()
-            log.debug("stdin raw: %r", raw[:200] if raw else "(empty)")
+            log.debug("stdin raw: %r", raw[:500] if raw else "(empty)")
             stdin_data = json.loads(raw)
         except (json.JSONDecodeError, EOFError, ValueError) as exc:
             log.debug("stdin parse failed: %s", exc)
