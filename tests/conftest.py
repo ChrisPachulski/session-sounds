@@ -20,10 +20,15 @@ def sound_env(tmp_path, monkeypatch):
     themes_dir = sounds_dir / "themes"
     themes_dir.mkdir()
 
-    # Create 5 fake WAV files (1-byte stubs)
+    # Sounds now load exclusively from the active theme directory (the legacy
+    # loose-WAV fallback in sounds/ was removed in the "ship default theme"
+    # change). Create the "default" theme (SESSION_SOUNDS_THEME's default value)
+    # with 5 fake WAV stubs so _load_pool() has a 5-sound pool.
     names = ["alpha", "bravo", "charlie", "delta", "echo"]
+    default_theme_dir = themes_dir / "default"
+    default_theme_dir.mkdir()
     for name in names:
-        (sounds_dir / f"{name}.wav").write_bytes(b"\x00")
+        (default_theme_dir / f"{name}.wav").write_bytes(b"\x00")
 
     # Patch sound_manager constants
     import sound_manager

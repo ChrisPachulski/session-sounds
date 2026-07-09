@@ -9,16 +9,18 @@ import sound_manager
 def test_load_pool_discovers_wav_files(sound_env):
     pool = sound_manager._load_pool()
     assert len(pool) == 5
-    filenames = {e["file"] for e in pool}
+    # Theme pool stores absolute paths; match on basename.
+    filenames = {Path(e["file"]).name for e in pool}
     assert "alpha.wav" in filenames
 
 
 def test_load_pool_skips_candidate_patterns(sound_env):
     # _CANDIDATE_RE: ^(src_|.*_[a-c])$ -- skips exact stem "src_" and stems ending _a/_b/_c
-    (sound_env["sounds_dir"] / "thing_a.wav").write_bytes(b"\x00")
-    (sound_env["sounds_dir"] / "thing_b.wav").write_bytes(b"\x00")
+    default_theme_dir = sound_env["themes_dir"] / "default"
+    (default_theme_dir / "thing_a.wav").write_bytes(b"\x00")
+    (default_theme_dir / "thing_b.wav").write_bytes(b"\x00")
     pool = sound_manager._load_pool()
-    filenames = {e["file"] for e in pool}
+    filenames = {Path(e["file"]).name for e in pool}
     assert "thing_a.wav" not in filenames
     assert "thing_b.wav" not in filenames
 
@@ -41,10 +43,12 @@ def test_get_assigned_files_returns_correct_set(sound_env):
 def test_cleanup_if_pressured_evicts_oldest(sound_env):
     adir = sound_env["assignments_dir"]
     pool = sound_manager._load_pool()
-    # Assign 4 of 5 sounds (pressure threshold is 2, so 1 available < 2 -> cleanup triggers)
-    for i, name in enumerate(["alpha", "bravo", "charlie", "delta"]):
+    # Assign 4 of 5 sounds (pressure threshold is 2, so 1 available < 2 -> cleanup
+    # triggers). Use the pool entries' own "file" values so the assignment records
+    # match how production assign() stores them (theme WAVs are absolute paths).
+    for i, entry in enumerate(pool[:4]):
         f = adir / f"sess{i}.json"
-        f.write_text(json.dumps({"file": f"{name}.wav", "name": name.title()}))
+        f.write_text(json.dumps({"file": entry["file"], "name": entry["name"]}))
         os.utime(f, (time.time() - 1000 + i, time.time() - 1000 + i))
 
     sound_manager._cleanup_if_pressured(pool)
@@ -55,10 +59,11 @@ def test_cleanup_if_pressured_evicts_oldest(sound_env):
 def test_cleanup_skips_reservations(sound_env):
     adir = sound_env["assignments_dir"]
     pool = sound_manager._load_pool()
-    # Create 4 assignments to trigger pressure
-    for i, name in enumerate(["alpha", "bravo", "charlie", "delta"]):
+    # Create 4 assignments to trigger pressure. Use the pool entries' own "file"
+    # values so the records match production (theme WAVs are absolute paths).
+    for i, entry in enumerate(pool[:4]):
         f = adir / f"sess{i}.json"
-        data = {"file": f"{name}.wav", "name": name.title()}
+        data = {"file": entry["file"], "name": entry["name"]}
         if i == 0:
             data["reserved_at"] = time.time() - 5  # fresh reservation
         f.write_text(json.dumps(data))
@@ -93,17 +98,14 @@ def test_release_missing_file_no_error(sound_env):
     sound_manager.release("nonexistent")  # should not raise
 
 
-def test_play_corrupt_assignment_recovers(sound_env):
+def test_play_corrupt_assignment_deletes_and_stays_silent(sound_env):
     adir = sound_env["assignments_dir"]
     corrupt = adir / "corrupt-sess.json"
     corrupt.write_text("{bad json")
-    # Should not raise; should clean up corrupt file and re-assign
+    # play() must not raise on a corrupt assignment; it deletes the bad file and
+    # stays silent (it does not re-assign -- assignment is pick()/assign()'s job).
     sound_manager.play("corrupt-sess", event="completion")
-    # The file is re-created with a valid assignment after recovery
-    assert corrupt.exists()
-    data = json.loads(corrupt.read_text())
-    assert "file" in data
-    assert "name" in data
+    assert not corrupt.exists()
 
 
 def test_play_unknown_session_skips(sound_env):
