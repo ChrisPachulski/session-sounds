@@ -35,18 +35,21 @@ def test_theme_auto_titles_when_no_mapping(sound_env, monkeypatch):
     assert pool[0]["name"] == "Cool Sound"
 
 
-def test_missing_theme_falls_back_to_legacy(sound_env, monkeypatch):
+def test_missing_theme_yields_empty_pool(sound_env, monkeypatch):
+    # The legacy loose-WAV fallback was removed: an unknown theme has no WAVs,
+    # so the pool is empty (no silent fallback to loose files in sounds/).
     monkeypatch.setattr(sound_manager, "SESSION_SOUNDS_THEME", "nonexistent")
     pool = sound_manager._load_pool()
-    assert len(pool) == 5  # legacy loose WAVs in sounds_dir
+    assert pool == []
 
 
-def test_empty_theme_dir_falls_back_to_legacy(sound_env, monkeypatch):
+def test_empty_theme_dir_yields_empty_pool(sound_env, monkeypatch):
+    # An existing-but-empty theme dir also yields an empty pool (no fallback).
     theme_dir = sound_env["themes_dir"] / "empty"
     theme_dir.mkdir()
     monkeypatch.setattr(sound_manager, "SESSION_SOUNDS_THEME", "empty")
     pool = sound_manager._load_pool()
-    assert len(pool) == 5  # legacy
+    assert pool == []
 
 
 def test_theme_uses_absolute_paths(sound_env, monkeypatch):

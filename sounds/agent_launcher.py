@@ -12,6 +12,7 @@ Usage:
     python agent_launcher.py codex [args...]
 """
 
+import hashlib
 import json
 import os
 import random
@@ -160,8 +161,11 @@ def _claim_reservation(reservation_id: str) -> None:
 
 def _claim_file_for_rollout(rollout: Path) -> Path:
     """Return the claim lock file path for a given rollout."""
-    # Use a hash of the rollout path as the lock filename
-    rollout_hash = hash(str(rollout)) & 0xFFFFFFFF
+    # Use a stable content digest of the rollout path as the lock filename.
+    # Python's built-in hash(str) is salted per-process (PYTHONHASHSEED), so it
+    # would yield different filenames in different launcher processes, defeating
+    # the cross-process claim. sha1 is deterministic across processes.
+    rollout_hash = int(hashlib.sha1(str(rollout).encode()).hexdigest()[:8], 16)
     return sound_manager.ASSIGNMENTS_DIR / f".rollout_claim_{rollout_hash:08x}"
 
 
