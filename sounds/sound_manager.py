@@ -520,6 +520,10 @@ def play(session_id: str, event: str = "completion") -> None:
         log.warning("play: corrupt assignment %s: %s, skipping", assignment_file.name, exc)
         assignment_file.unlink(missing_ok=True)
         return
+    if not isinstance(choice, dict) or not choice.get("file"):
+        log.warning("play: assignment %s missing 'file' key, skipping", assignment_file.name)
+        assignment_file.unlink(missing_ok=True)
+        return
     wav_path = _resolve_event_sound(choice["file"], event)
     if wav_path is None:
         log.debug("play: event %s resolved to silence", event)
