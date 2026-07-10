@@ -400,7 +400,8 @@ def validate_pack_cli(pack_dir_str: str) -> None:
     pack_id = pack_dir.name
     pack = PackInfo(manifest=data, pack_dir=pack_dir, pack_id=pack_id)
     pool = resolve_pack(pack)
-    total = len(data.get("sounds", []))
+    entries = data.get("sounds") or data.get("pool") or []
+    total = len(entries)
     mode = data.get("mode", "bundled")
 
     pack_name = data.get("name", "?")
@@ -410,7 +411,7 @@ def validate_pack_cli(pack_dir_str: str) -> None:
 
     if mode == "recipe":
         missing = [
-            s["name"] for s in data["sounds"]
+            s["name"] for s in entries
             if not (pack_dir / s["file"]).is_file()
             and not _is_absolute_path(s["file"])
         ]
