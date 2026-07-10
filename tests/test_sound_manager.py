@@ -112,6 +112,15 @@ def test_play_unknown_session_skips(sound_env):
     sound_manager.play("unknown", event="completion")  # should not raise
 
 
+def test_play_missing_file_key_skips(sound_env):
+    adir = sound_env["assignments_dir"]
+    bad = adir / "nofile-sess.json"
+    bad.write_text(json.dumps({"name": "Alpha"}))  # valid JSON, no "file" key
+    sound_manager.play("nofile-sess", event="completion")  # must not raise KeyError
+    # Treated as corrupt: cleaned up so the hook stops crashing on it
+    assert not bad.exists()
+
+
 def test_assign_corrupt_existing_falls_through(sound_env, monkeypatch):
     adir = sound_env["assignments_dir"]
     corrupt = adir / "corrupt-assign.json"
