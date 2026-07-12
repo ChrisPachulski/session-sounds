@@ -549,19 +549,13 @@ def status() -> None:
         except Exception:
             print("  Hooks: could not read settings.json")
 
-    # Check events directory
-    events_dir = SOUNDS_DST / "events"
-    if events_dir.is_dir():
-        event_sounds = {}
-        for d in events_dir.iterdir():
-            if d.is_dir():
-                wavs = list(d.glob("*.wav"))
-                if wavs:
-                    event_sounds[d.name] = len(wavs)
-        if event_sounds:
-            print(f"  Event sounds: {', '.join(f'{k}({v})' for k, v in event_sounds.items())}")
-        else:
-            print("  Event sounds: none installed (will fall back to primary)")
+    # Event-type overrides are not a real feature: sound_manager's
+    # _resolve_event_sound() ignores the events/ directory entirely.
+    # completion/start/approval/error all play the session's identity sound,
+    # and end is always silent. Report that truthfully rather than counting the
+    # inert events/{type}/*.wav stubs as if they were active per-event sounds.
+    print("  Event overrides: not supported -- completion/start/approval/error "
+          "all play the identity sound; session end is silent.")
 
     # Check packs
     packs_dir = SOUNDS_DST / "packs"
