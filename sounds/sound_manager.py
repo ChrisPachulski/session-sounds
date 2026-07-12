@@ -494,14 +494,12 @@ def assign(session_id: str) -> None:
 def play(session_id: str, event: str = "completion") -> None:
     """Play the appropriate sound for this session and event type.
 
-    Resolution order:
-    1. events/{event}/{primary_stem}.wav  (per-sound variant)
-    2. events/{event}/default.wav         (universal event sound)
-    3. {primary_stem}.wav                 (primary sound fallback)
+    Every event except "end" plays the session's identity sound; "end" is
+    always silent. There is no per-event tiering (see _resolve_event_sound).
 
     Args:
         session_id: The Claude session ID.
-        event: One of "completion", "error", "approval", "end".
+        event: One of "completion", "start", "error", "approval", "end".
                Defaults to "completion" for backward compatibility.
     """
     if event not in VALID_EVENTS:
