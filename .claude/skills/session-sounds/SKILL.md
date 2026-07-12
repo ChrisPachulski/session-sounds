@@ -36,10 +36,11 @@ PowerShell/bash wrapper -> agent_launcher.py -> claude.exe
 3. **Launcher** plays startup sound in daemon thread, sets terminal title, starts spinner thread
 4. **Launcher** holds `.lock_{reservation_id}` open for session lifetime (liveness detection)
 5. **SessionStart hook** -> `sound_manager.py assign` claims the reservation, outputs `hookSpecificOutput` with sound name
-6. **Stop hook** -> `sound_manager.py play completion` (async) + `title_hook.py Stop` (spinner -> idle)
-7. **Notification hook** -> `sound_manager.py play approval` (async)
-8. **StopFailure hook** -> `sound_manager.py play error` (async) + `title_hook.py StopFailure`
-9. **SessionEnd hook** -> `sound_manager.py play end` + `release` + `title_hook.py SessionEnd`
+6. **UserPromptSubmit hook** -> `title_hook.py UserPromptSubmit` (spinner -> spin; no sound) re-arms the tab animation each turn
+7. **Stop hook** -> `sound_manager.py play completion` (async) + `title_hook.py Stop` (spinner -> idle)
+8. **Notification hook** -> `sound_manager.py play approval` (async)
+9. **StopFailure hook** -> `sound_manager.py play error` (async) + `title_hook.py StopFailure`
+10. **SessionEnd hook** -> `sound_manager.py play end` + `release` + `title_hook.py SessionEnd`
 
 ### hookSpecificOutput
 
@@ -266,7 +267,7 @@ The `.gitignore` in the repo root ensures:
 ~/.claude/skills/session-sounds/
   SKILL.md                # This file (installed by installer)
 
-~/.claude/settings.json   # Hooks: SessionStart, Stop, Notification, StopFailure, SessionEnd
+~/.claude/settings.json   # Hooks: SessionStart, UserPromptSubmit, Stop, Notification, StopFailure, SessionEnd
 ```
 
 ## Terminal Title Dispatch
