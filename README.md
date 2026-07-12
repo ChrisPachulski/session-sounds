@@ -221,21 +221,20 @@ See the `packs/` directory for examples, including a `windows-native` pack that 
 
 ## Event-type sounds
 
-Different events play different sounds:
+Every event plays your session's identity sound -- there is no per-event customization today:
 
 | Event | When | Sound |
 |---|---|---|
-| Completion | Agent finishes a response | Your session's primary sound |
-| Error | API error or hard failure | Short error tone (or primary as fallback) |
-| Approval | Agent needs your permission | Rising two-note chime (or primary as fallback) |
-| Session end | You close the session | Soft descending tone (or silence) |
+| Completion | Agent finishes a response | Your session's identity sound |
+| Start | Session launches | Your session's identity sound |
+| Error | API error or hard failure | Your session's identity sound |
+| Approval | Agent needs your permission | Your session's identity sound |
+| Session end | You close the session | Silent (no sound) |
 
-Event sounds resolve through a three-tier fallback:
-1. Per-sound variant: `events/error/pixel_rise.wav` (custom variant for that session sound)
-2. Universal default: `events/error/default.wav` (generic error tone)
-3. Primary sound: your session's identity sound (completion always uses this)
-
-Add custom event variants by dropping WAV files into `~/.claude/sounds/events/{event_type}/`.
+Completion, start, error, and approval all play the same identity sound assigned to the
+session. Session end is always silent. Dropping WAV files into
+`~/.claude/sounds/events/{event_type}/` has no effect -- the earlier per-event fallback
+tiers were removed.
 
 ---
 

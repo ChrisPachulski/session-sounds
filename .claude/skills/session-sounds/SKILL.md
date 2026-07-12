@@ -127,17 +127,22 @@ Activate: `export SESSION_SOUNDS_THEME=personal` (or set in `~/.claude/sounds/co
 
 ### Event sounds
 
+Every non-end event plays the session's identity sound. There is no per-event
+customization today -- `_resolve_event_sound()` returns the identity sound for
+`completion`/`start`/`error`/`approval` and `None` (silence) for `end`.
+
 | Event | When | Resolution |
 |-------|------|------------|
-| completion | Agent finishes response | Always primary sound |
-| error | API error or failure | Per-sound variant -> default.wav -> primary |
-| approval | Needs user permission | Per-sound variant -> default.wav -> primary |
-| end | Session closes | Per-sound variant -> default.wav -> silence |
+| completion | Agent finishes response | Identity sound |
+| start | Session launches | Identity sound |
+| error | API error or failure | Identity sound |
+| approval | Needs user permission | Identity sound |
+| end | Session closes | Silent (None) |
 
-Three synthesized event defaults ship with the repo (tracked in git -- non-copyrighted):
-- `events/error/default.wav`
-- `events/approval/default.wav`
-- `events/end/default.wav`
+The old 3-tier resolution (per-sound variant -> `default.wav` -> primary) was
+removed. `events/{event}/*.wav` files under `~/.claude/sounds/` are never
+consulted -- dropping WAVs there has no effect. The `events/` directory the
+installer still copies (`events/error|approval|end/default.wav`) is inert.
 
 ## Personal Sound Customization
 

@@ -124,3 +124,67 @@ def test_assign_corrupt_existing_falls_through(sound_env, monkeypatch):
     data = json.loads((adir / "corrupt-assign.json").read_text())
     assert "file" in data
     assert "name" in data
+
+
+def _seed_events_dir(sound_env, primary_stem, event):
+    """Create a fake per-sound variant AND a default.wav under EVENTS_DIR/{event}/.
+
+    These are the exact files the removed 3-tier resolver would have consulted.
+    They exist only so the pinning tests can prove _resolve_event_sound() never
+    looks at them.
+    """
+    events_root = sound_env["sounds_dir"] / "events" / event
+    events_root.mkdir(parents=True, exist_ok=True)
+    variant = events_root / f"{primary_stem}.wav"
+    default = events_root / "default.wav"
+    variant.write_bytes(b"\x00")
+    default.write_bytes(b"\x00")
+    return variant, default
+
+
+def test_resolve_event_sound_ignores_events_dir(sound_env):
+    """Pins commit 9b8cb6f: 'error' always resolves to the identity sound.
+
+    Even when a per-sound variant AND a universal default.wav exist under
+    EVENTS_DIR/error/, _resolve_event_sound() must return the primary sound
+    path -- no per-sound-variant / default.wav tier is ever consulted.
+    """
+    primary_file = "alpha.wav"
+    variant, default = _seed_events_dir(sound_env, "alpha", "error")
+
+    resolved = sound_manager._resolve_event_sound(primary_file, "error")
+
+    expected = sound_env["sounds_dir"] / primary_file
+    assert resolved == expected
+    # Prove it did NOT reach into EVENTS_DIR for either tier.
+    assert resolved != variant
+    assert resolved != default
+    assert sound_manager.EVENTS_DIR not in resolved.parents
+
+
+def test_resolve_event_sound_approval_ignores_events_dir(sound_env):
+    """Sibling of the 'error' test: 'approval' also always uses the identity sound."""
+    primary_file = "bravo.wav"
+    variant, default = _seed_events_dir(sound_env, "bravo", "approval")
+
+    resolved = sound_manager._resolve_event_sound(primary_file, "approval")
+
+    expected = sound_env["sounds_dir"] / primary_file
+    assert resolved == expected
+    assert resolved != variant
+    assert resolved != default
+    assert sound_manager.EVENTS_DIR not in resolved.parents
+
+
+def test_resolve_event_sound_end_is_always_silent(sound_env):
+    """Pins commit 9b8cb6f: 'end' is unconditionally silent (None).
+
+    A per-sound variant and default.wav exist under EVENTS_DIR/end/, but the
+    resolver returns None before any file check happens -- contrary to the old
+    docs' 'Per-sound variant -> default.wav -> silence' chain.
+    """
+    _seed_events_dir(sound_env, "charlie", "end")
+
+    resolved = sound_manager._resolve_event_sound("charlie.wav", "end")
+
+    assert resolved is None
