@@ -329,7 +329,8 @@ def list_packs() -> None:
     for pack_id, pack in sorted(all_packs.items()):
         m = pack["manifest"]
         resolved = resolve_pack(pack)
-        total = len(m.get("sounds", []))
+        entries = m.get("sounds") or m.get("pool") or []
+        total = len(entries)
         available = len(resolved)
         mode = m.get("mode", "bundled")
         is_active = "ACTIVE" if pack_id == active_id else ""
@@ -430,6 +431,7 @@ def _info_pack(pack_id: str) -> None:
         return
 
     m = pack["manifest"]
+    entries = m.get("sounds") or m.get("pool") or []
     pool = resolve_pack(pack)
     active_id = get_active_pack_id()
 
@@ -441,7 +443,7 @@ def _info_pack(pack_id: str) -> None:
     mode = m.get("mode", "bundled")
     loc = pack["pack_dir"]
     active_str = "yes" if pack_id == active_id else "no"
-    total = len(m.get("sounds", []))
+    total = len(entries)
 
     print(f"Pack: {pack_name}")
     print(f"  ID:          {pack_id}")
@@ -455,7 +457,7 @@ def _info_pack(pack_id: str) -> None:
     print(f"  Sounds:      {len(pool)}/{total} playable")
     print()
 
-    for s in m.get("sounds", []):
+    for s in entries:
         file_str = s["file"]
         if _is_absolute_path(file_str):
             wav_path = Path(file_str)
