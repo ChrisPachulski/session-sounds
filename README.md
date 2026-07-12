@@ -281,6 +281,7 @@ Claude Code supports [hooks](https://docs.anthropic.com/en/docs/claude-code/hook
 | Hook | Event | Action |
 |------|-------|--------|
 | `SessionStart` | Session opens | Claims the sound reservation from the launcher |
+| `UserPromptSubmit` | Prompt submitted | Re-arms the tab spinner (`spin`) each turn -- no sound |
 | `Stop` | After each response | Plays the completion sound (async) + refreshes tab title |
 | `Notification` | Needs user approval | Plays the approval sound (async) |
 | `StopFailure` | Error or failure | Plays the error sound (async) |

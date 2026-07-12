@@ -278,7 +278,7 @@ The `.gitignore` in the repo root ensures:
 ~/.claude/skills/session-sounds/
   SKILL.md                # This file (installed by installer)
 
-~/.claude/settings.json   # Hooks: SessionStart, Stop, Notification, StopFailure, SessionEnd
+~/.claude/settings.json   # Hooks: SessionStart, UserPromptSubmit, Stop, Notification, StopFailure, SessionEnd
 ```
 
 ## Terminal Title Dispatch

@@ -123,6 +123,11 @@ def _hook_commands() -> dict:
             {"type": "command", "command": f'{sm} assign', "timeout": 5},
             {"type": "command", "command": f'{th} SessionStart', "timeout": 5},
         ]}],
+        "UserPromptSubmit": [{"hooks": [
+            # No sound on prompt submit -- only flip the spinner state to "spin"
+            # so the tab title animates on turns after the first (SessionStart).
+            {"type": "command", "command": f'{th} UserPromptSubmit', "timeout": 5},
+        ]}],
         "Stop": [{"hooks": [
             {"type": "command", "command": f'{sm} play completion', "async": True, "timeout": 10},
             {"type": "command", "command": f'{th} Stop', "timeout": 5},
