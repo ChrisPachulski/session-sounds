@@ -1,7 +1,7 @@
 use crate::audio::{self, AudioBackend, Platform, Playback};
 use crate::config::{load_config, ConfigGuard};
 use crate::event::PluginEvent;
-use crate::herdr::{Herdr, Metadata, MetadataClear};
+use crate::herdr::{Herdr, Metadata, MetadataClear, PaneInfo};
 use crate::state::{
     apply_detection_observation, apply_status_observation, assign_sound, cleanup_pane,
     next_metadata_seq, reconcile_under_pressure, reshuffle_pane, Assignment, StateStore,
@@ -304,34 +304,92 @@ fn handle_move_event(
     if identity.workspace_id.is_none() {
         identity.workspace_id = workspace_id.map(str::to_owned);
     }
+    let previous_live = if previous_pane_id == pane_id {
+        Ok(Some(pane))
+    } else {
+        live_pane_at(herdr, previous_pane_id)
+    };
     let observed_at = now_ms();
     let state = state_guard.state_mut();
-    let previous_owned_by_current = state
-        .assignments
-        .iter()
-        .find(|assignment| assignment.pane_id == previous_pane_id)
-        .is_some_and(|assignment| assignment.identity == identity.key);
-    if !previous_owned_by_current {
-        cleanup_pane(state, previous_pane_id);
-    }
+    let previous_assignment = match previous_live {
+        Ok(Some(previous)) => match previous.identity() {
+            Some(previous_identity) if previous_identity.key != identity.key => Some(
+                assign_sound(
+                    state,
+                    &previous_identity,
+                    &loaded_theme.theme.sounds,
+                    observed_at,
+                )
+                .clone(),
+            ),
+            Some(_) => None,
+            None => {
+                warn(
+                    stderr,
+                    "previous pane address is still live without a durable identity; retaining assignment",
+                )?;
+                None
+            }
+        },
+        Ok(None) => {
+            cleanup_pane(state, previous_pane_id);
+            None
+        }
+        Err(error) => {
+            warn(
+                stderr,
+                &format!(
+                    "could not confirm previous pane after move ({error}); retaining assignment"
+                ),
+            )?;
+            None
+        }
+    };
     let assignment =
         assign_sound(state, &identity, &loaded_theme.theme.sounds, observed_at).clone();
-    let seq = loaded_config.config.enabled.then(|| {
-        next_metadata_seq(
-            state,
-            assignment
-                .terminal_id
-                .as_deref()
-                .unwrap_or(&assignment.pane_id),
-            "session-sounds",
-            observed_at,
-        )
+    let reports = loaded_config.config.enabled.then(|| {
+        previous_assignment
+            .into_iter()
+            .chain([assignment.clone()])
+            .map(|assignment| {
+                let seq = next_metadata_seq(
+                    state,
+                    assignment
+                        .terminal_id
+                        .as_deref()
+                        .unwrap_or(&assignment.pane_id),
+                    "session-sounds",
+                    observed_at,
+                );
+                (assignment, seq)
+            })
+            .collect::<Vec<_>>()
     });
     state_guard.commit().map_err(|error| error.to_string())?;
-    if let Some(seq) = seq {
-        report_assignment(herdr, stderr, &assignment, &loaded_theme.theme, seq)?;
+    if let Some(reports) = reports {
+        for (assignment, seq) in reports {
+            report_assignment(herdr, stderr, &assignment, &loaded_theme.theme, seq)?;
+        }
     }
     Ok(())
+}
+
+fn live_pane_at(herdr: &dyn Herdr, pane_id: &str) -> Result<Option<PaneInfo>, String> {
+    let pane_error = match herdr.pane_info(pane_id) {
+        Ok(pane) if pane.pane_id == pane_id => return Ok(Some(pane)),
+        Ok(pane) => format!(
+            "pane query returned address {} instead of {pane_id}",
+            pane.pane_id
+        ),
+        Err(error) => error,
+    };
+    match herdr.live_snapshot() {
+        Ok(snapshot) => Ok(snapshot
+            .panes
+            .into_iter()
+            .find(|pane| pane.pane_id == pane_id)),
+        Err(snapshot_error) => Err(format!("{pane_error}; {snapshot_error}")),
+    }
 }
 
 fn handle_cleanup_event(

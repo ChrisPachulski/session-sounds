@@ -154,8 +154,16 @@ fn create_temporary(config_dir: &Path) -> io::Result<(PathBuf, File)> {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
+    create_temporary_at(config_dir, now, &TEMP_COUNTER)
+}
+
+fn create_temporary_at(
+    config_dir: &Path,
+    now: u128,
+    counter: &AtomicU64,
+) -> io::Result<(PathBuf, File)> {
     loop {
-        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let counter = counter.fetch_add(1, Ordering::Relaxed);
         let path = config_dir.join(format!(
             ".config.{}.{now}.{counter}.tmp",
             std::process::id()
@@ -165,5 +173,33 @@ fn create_temporary(config_dir: &Path) -> io::Result<(PathBuf, File)> {
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn generated_temporary_name_retries_a_real_candidate_collision() {
+        let directory = tempdir().unwrap();
+        let now = 42;
+        let counter = AtomicU64::new(7);
+        let collision = directory
+            .path()
+            .join(format!(".config.{}.{now}.7.tmp", std::process::id()));
+        fs::write(&collision, b"occupied").unwrap();
+
+        let (path, file) = create_temporary_at(directory.path(), now, &counter).unwrap();
+        drop(file);
+
+        assert_eq!(
+            path,
+            directory
+                .path()
+                .join(format!(".config.{}.{now}.8.tmp", std::process::id()))
+        );
+        assert_eq!(fs::read(collision).unwrap(), b"occupied");
     }
 }

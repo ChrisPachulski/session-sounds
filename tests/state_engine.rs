@@ -500,6 +500,72 @@ fn rapid_second_cycle_is_not_permanently_hidden_by_handled_flags() {
 }
 
 #[test]
+fn repeated_working_event_can_confirm_a_later_done_cycle_after_stale_reordering() {
+    let pool = sounds(1);
+    let mut state = State::default();
+    let assignment = assign_sound(&mut state, &pane(1), &pool, 0);
+    assignment.status = Some("done".into());
+    assignment.completion_handled = true;
+    assignment.last_event_status = Some("working".into());
+    assignment.last_played_at_ms = Some(10);
+
+    assert!(!apply_status_observation(
+        assignment,
+        Some("working"),
+        Some("done"),
+        false,
+        2_000,
+    ));
+    assert!(apply_status_observation(
+        assignment,
+        Some("done"),
+        Some("done"),
+        false,
+        2_001,
+    ));
+    assert!(!apply_status_observation(
+        assignment,
+        Some("done"),
+        Some("done"),
+        false,
+        4_000,
+    ));
+}
+
+#[test]
+fn repeated_working_event_can_confirm_a_later_blocked_cycle_after_stale_reordering() {
+    let pool = sounds(1);
+    let mut state = State::default();
+    let assignment = assign_sound(&mut state, &pane(1), &pool, 0);
+    assignment.status = Some("blocked".into());
+    assignment.blocked_handled = true;
+    assignment.last_event_status = Some("working".into());
+    assignment.last_played_at_ms = Some(10);
+
+    assert!(!apply_status_observation(
+        assignment,
+        Some("working"),
+        Some("blocked"),
+        false,
+        2_000,
+    ));
+    assert!(apply_status_observation(
+        assignment,
+        Some("blocked"),
+        Some("blocked"),
+        false,
+        2_001,
+    ));
+    assert!(!apply_status_observation(
+        assignment,
+        Some("blocked"),
+        Some("blocked"),
+        false,
+        4_000,
+    ));
+}
+
+#[test]
 fn foreground_completion_to_idle_does_not_play() {
     let pool = sounds(1);
     let mut state = State::default();

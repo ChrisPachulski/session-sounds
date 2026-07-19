@@ -79,6 +79,8 @@ pub struct Assignment {
     pub blocked_handled: bool,
     #[serde(default)]
     pub last_event_status: Option<String>,
+    #[serde(default)]
+    pub pending_cycle_predecessor: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -165,6 +167,7 @@ pub fn assign_sound<'a>(
         completion_handled: false,
         blocked_handled: false,
         last_event_status: None,
+        pending_cycle_predecessor: None,
     });
     state.assignments.last_mut().expect("assignment was pushed")
 }
@@ -354,10 +357,22 @@ pub fn apply_status_observation(
         event_status.is_some() && event_status == assignment.last_event_status.as_deref();
     match current {
         "done" => {
-            if !event_is_duplicate {
-                if let Some(historical @ ("working" | "blocked")) =
-                    event_status.filter(|event_status| *event_status != current)
+            let confirmed_predecessor = (event_status == Some(current))
+                .then(|| assignment.pending_cycle_predecessor.take())
+                .flatten()
+                .filter(|status| matches!(status.as_str(), "working" | "blocked"));
+            if let Some(historical) = confirmed_predecessor {
+                set_historical_status(assignment, &historical);
+            } else if let Some(historical @ ("working" | "blocked")) =
+                event_status.filter(|event_status| *event_status != current)
+            {
+                if event_is_duplicate
+                    && assignment.status.as_deref() == Some(current)
+                    && assignment.completion_handled
                 {
+                    assignment.pending_cycle_predecessor = Some(historical.into());
+                } else if !event_is_duplicate {
+                    assignment.pending_cycle_predecessor = None;
                     set_historical_status(assignment, historical);
                 }
             }
@@ -368,10 +383,22 @@ pub fn apply_status_observation(
             }
         }
         "blocked" => {
-            if !event_is_duplicate {
-                if let Some(historical) = event_status
-                    .filter(|event_status| *event_status != "blocked" && known_status(event_status))
+            let confirmed_predecessor = (event_status == Some(current))
+                .then(|| assignment.pending_cycle_predecessor.take())
+                .flatten()
+                .filter(|status| status != "blocked" && known_status(status));
+            if let Some(historical) = confirmed_predecessor {
+                set_historical_status(assignment, &historical);
+            } else if let Some(historical) = event_status
+                .filter(|event_status| *event_status != "blocked" && known_status(event_status))
+            {
+                if event_is_duplicate
+                    && assignment.status.as_deref() == Some(current)
+                    && assignment.blocked_handled
                 {
+                    assignment.pending_cycle_predecessor = Some(historical.into());
+                } else if !event_is_duplicate {
+                    assignment.pending_cycle_predecessor = None;
                     set_historical_status(assignment, historical);
                 }
             }
@@ -379,7 +406,7 @@ pub fn apply_status_observation(
                 set_historical_status(assignment, "working");
             }
         }
-        _ => {}
+        _ => assignment.pending_cycle_predecessor = None,
     }
     let play = apply_status(assignment, current, target_visible, now_ms);
     if let Some(event_status) = event_status {

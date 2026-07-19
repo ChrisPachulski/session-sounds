@@ -7,6 +7,7 @@ use session_sounds::herdr::{
 };
 use session_sounds::state::{assign_sound, PaneIdentity, StateStore};
 use session_sounds::theme::load_theme;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Barrier, Mutex};
@@ -17,6 +18,8 @@ use tempfile::tempdir;
 #[derive(Default)]
 struct FakeHerdr {
     pane: PaneInfo,
+    pane_overrides: BTreeMap<String, PaneInfo>,
+    pane_errors: BTreeMap<String, String>,
     live_status: Mutex<Option<String>>,
     snapshot: LiveSnapshot,
     metadata: Mutex<Vec<Metadata>>,
@@ -27,11 +30,18 @@ struct FakeHerdr {
 }
 
 impl Herdr for FakeHerdr {
-    fn pane_info(&self, _pane_id: &str) -> Result<PaneInfo, String> {
+    fn pane_info(&self, pane_id: &str) -> Result<PaneInfo, String> {
+        if let Some(error) = self.pane_errors.get(pane_id) {
+            return Err(error.clone());
+        }
         if let Some(error) = &self.pane_error {
             return Err(error.clone());
         }
-        let mut pane = self.pane.clone();
+        let mut pane = self
+            .pane_overrides
+            .get(pane_id)
+            .cloned()
+            .unwrap_or_else(|| self.pane.clone());
         if let Some(status) = self.live_status.lock().unwrap().clone() {
             pane.agent_status = status;
         }
@@ -153,6 +163,39 @@ impl AudioSink for FakeAudio {
     fn readiness(&self) -> Option<AudioBackend> {
         Some(AudioBackend::Command("fake-player"))
     }
+}
+
+struct GatedAudio {
+    entered: mpsc::Sender<()>,
+    release: Mutex<mpsc::Receiver<()>>,
+    played: Mutex<Vec<PathBuf>>,
+}
+
+impl AudioSink for GatedAudio {
+    fn play(&self, path: &Path) -> Playback {
+        self.entered.send(()).unwrap();
+        self.release.lock().unwrap().recv().unwrap();
+        self.played.lock().unwrap().push(path.into());
+        Playback::Started
+    }
+
+    fn readiness(&self) -> Option<AudioBackend> {
+        Some(AudioBackend::Command("gated-player"))
+    }
+}
+
+fn gated_audio() -> (Arc<GatedAudio>, mpsc::Receiver<()>, mpsc::Sender<()>) {
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    (
+        Arc::new(GatedAudio {
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+            played: Mutex::new(Vec::new()),
+        }),
+        entered_rx,
+        release_tx,
+    )
 }
 
 fn pane() -> PaneInfo {
@@ -663,11 +706,14 @@ fn move_event_emits_config_and_theme_fallback_warnings() {
 }
 
 #[test]
-fn move_event_removes_a_stale_previous_owner_when_current_identity_exists_elsewhere() {
+fn delayed_move_cleans_previous_assignment_after_snapshot_confirms_absence() {
     let config = tempdir().unwrap();
     let state = tempdir().unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let herdr = fake_herdr(false);
+    let mut herdr = fake_herdr(false);
+    herdr
+        .pane_errors
+        .insert("w1:p0".into(), "pane not found".into());
     let audio = FakeAudio::default();
     let theme = load_theme(root, config.path(), "default").unwrap().theme;
     let mut current_elsewhere = herdr.pane.identity().unwrap();
@@ -702,6 +748,112 @@ fn move_event_removes_a_stale_previous_owner_when_current_identity_exists_elsewh
         herdr.pane.identity().unwrap().key
     );
     assert_eq!(stored.assignments[0].pane_id, "w1:p1");
+}
+
+#[test]
+fn delayed_move_retains_and_reconciles_a_live_replacement_at_the_previous_address() {
+    let config = tempdir().unwrap();
+    let state = tempdir().unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut herdr = fake_herdr(false);
+    let mut replacement = pane();
+    replacement.pane_id = "w1:p0".into();
+    replacement.terminal_id = "term-replacement".into();
+    replacement.agent_session.as_mut().unwrap().value = "replacement-session".into();
+    herdr
+        .pane_overrides
+        .insert(replacement.pane_id.clone(), replacement.clone());
+    herdr.snapshot.panes.push(replacement.clone());
+    let audio = FakeAudio::default();
+    let theme = load_theme(root, config.path(), "default").unwrap().theme;
+    let mut current_elsewhere = herdr.pane.identity().unwrap();
+    current_elsewhere.pane_id = "w1:p9".into();
+    let mut stale_previous = current_elsewhere.clone();
+    stale_previous.key = session_sounds::state::IdentityKey::AgentSession {
+        agent: "codex".into(),
+        session_kind: "id".into(),
+        session_value: "stale".into(),
+    };
+    stale_previous.pane_id = "w1:p0".into();
+    stale_previous.terminal_id = Some("term-stale".into());
+    StateStore::new(state.path())
+        .transaction(|stored| {
+            assign_sound(stored, &current_elsewhere, &theme.sounds, 1);
+            assign_sound(stored, &stale_previous, &theme.sounds, 2);
+            Ok(())
+        })
+        .unwrap();
+    let mut plugin_env = env(root, config.path(), state.path());
+    plugin_env.event = Some("pane.moved".into());
+    plugin_env.event_json = Some(
+        r#"{"data":{"pane_id":"w1:p1","previous_pane_id":"w1:p0","workspace_id":"w1"}}"#.into(),
+    );
+
+    assert_eq!(run("event", &plugin_env, &herdr, &audio).0, 0);
+
+    let stored = StateStore::new(state.path()).read().unwrap().state;
+    assert_eq!(stored.assignments.len(), 2);
+    assert!(stored.assignments.iter().any(|assignment| {
+        assignment.identity == herdr.pane.identity().unwrap().key && assignment.pane_id == "w1:p1"
+    }));
+    assert!(stored.assignments.iter().any(|assignment| {
+        assignment.identity == replacement.identity().unwrap().key
+            && assignment.pane_id == "w1:p0"
+            && theme
+                .sounds
+                .iter()
+                .any(|sound| sound.id == assignment.sound_id)
+    }));
+}
+
+#[test]
+fn delayed_move_retains_previous_assignment_when_live_state_is_indeterminate() {
+    let config = tempdir().unwrap();
+    let state = tempdir().unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut herdr = fake_herdr(false);
+    herdr
+        .pane_errors
+        .insert("w1:p0".into(), "pane transport failed".into());
+    herdr.snapshot_error = Some("snapshot transport failed".into());
+    let audio = FakeAudio::default();
+    let theme = load_theme(root, config.path(), "default").unwrap().theme;
+    let mut current_elsewhere = herdr.pane.identity().unwrap();
+    current_elsewhere.pane_id = "w1:p9".into();
+    let mut previous = current_elsewhere.clone();
+    previous.key = session_sounds::state::IdentityKey::AgentSession {
+        agent: "codex".into(),
+        session_kind: "id".into(),
+        session_value: "previous-session".into(),
+    };
+    previous.pane_id = "w1:p0".into();
+    previous.terminal_id = Some("term-previous".into());
+    StateStore::new(state.path())
+        .transaction(|stored| {
+            assign_sound(stored, &current_elsewhere, &theme.sounds, 1);
+            assign_sound(stored, &previous, &theme.sounds, 2);
+            Ok(())
+        })
+        .unwrap();
+    let mut plugin_env = env(root, config.path(), state.path());
+    plugin_env.event = Some("pane.moved".into());
+    plugin_env.event_json = Some(
+        r#"{"data":{"pane_id":"w1:p1","previous_pane_id":"w1:p0","workspace_id":"w1"}}"#.into(),
+    );
+
+    let result = run("event", &plugin_env, &herdr, &audio);
+
+    assert_eq!(result.0, 0);
+    assert!(result.2.contains("retaining assignment"));
+    let stored = StateStore::new(state.path()).read().unwrap().state;
+    assert_eq!(stored.assignments.len(), 2);
+    assert!(stored
+        .assignments
+        .iter()
+        .any(|assignment| assignment.identity == previous.key && assignment.pane_id == "w1:p0"));
+    assert!(stored.assignments.iter().any(|assignment| {
+        assignment.identity == herdr.pane.identity().unwrap().key && assignment.pane_id == "w1:p1"
+    }));
 }
 
 #[test]
@@ -840,6 +992,66 @@ fn mute_waits_for_an_older_event_and_is_the_last_metadata_effect() {
         herdr.effects.lock().unwrap().as_slice(),
         &["report", "clear"]
     );
+}
+
+#[test]
+fn mute_cannot_return_while_an_older_completion_is_playing() {
+    let config = tempdir().unwrap();
+    let state = tempdir().unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let herdr = Arc::new(fake_herdr(false));
+    herdr.set_status("done");
+    let (audio, playback_entered, release_playback) = gated_audio();
+    let theme = load_theme(root, config.path(), "default").unwrap().theme;
+    StateStore::new(state.path())
+        .transaction(|stored| {
+            let assignment =
+                assign_sound(stored, &herdr.pane.identity().unwrap(), &theme.sounds, 1);
+            assignment.status = Some("working".into());
+            Ok(())
+        })
+        .unwrap();
+    let mut event_env = env(root, config.path(), state.path());
+    event_env.event = Some("pane.agent_status_changed".into());
+    event_env.event_json = Some(r#"{"data":{"pane_id":"w1:p1","agent_status":"done"}}"#.into());
+    let event_herdr = Arc::clone(&herdr);
+    let event_audio = Arc::clone(&audio);
+    let event_worker = thread::spawn(move || {
+        run(
+            "event",
+            &event_env,
+            event_herdr.as_ref(),
+            event_audio.as_ref(),
+        )
+    });
+    playback_entered
+        .recv_timeout(Duration::from_secs(2))
+        .expect("completion playback began");
+
+    let mute_env = env(root, config.path(), state.path());
+    let mute_herdr = Arc::clone(&herdr);
+    let mute_audio = Arc::clone(&audio);
+    let (mute_done_tx, mute_done_rx) = mpsc::channel();
+    let mute_worker = thread::spawn(move || {
+        let result = run(
+            "toggle-mute",
+            &mute_env,
+            mute_herdr.as_ref(),
+            mute_audio.as_ref(),
+        );
+        mute_done_tx.send(()).unwrap();
+        result
+    });
+
+    assert!(mute_done_rx
+        .recv_timeout(Duration::from_millis(150))
+        .is_err());
+    release_playback.send(()).unwrap();
+
+    assert_eq!(event_worker.join().unwrap().0, 0);
+    assert_eq!(mute_worker.join().unwrap().0, 0);
+    assert_eq!(audio.played.lock().unwrap().len(), 1);
+    assert!(!load_config(config.path()).config.enabled);
 }
 
 #[test]

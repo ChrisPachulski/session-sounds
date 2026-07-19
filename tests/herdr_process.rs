@@ -55,17 +55,16 @@ fi
         .unwrap();
 
     let argv = fs::read_to_string(capture).unwrap();
-    assert!(argv.contains("<pane><get><w1:p1>"));
-    assert!(argv.contains("<workspace><list>"));
-    assert!(argv.contains("<pane><list><--workspace><w1>"));
-    assert!(argv.contains("<--token><sound=Warm Bell>"));
-    assert!(argv.contains("<--display-agent><codex · Warm Bell>"));
-    assert!(argv.contains("<--agent><codex>"));
-    assert!(argv.contains("<--applies-to-source><native>"));
-    assert!(argv.contains("<--seq><101>"));
-    assert!(argv.contains("<--ttl-ms><86400000>"));
-    assert!(argv.contains("<--clear-token><sound><--clear-display-agent>"));
-    assert!(argv.contains("<--seq><102>"));
+    assert_eq!(
+        argv.lines().collect::<Vec<_>>(),
+        vec![
+            "<pane><get><w1:p1>",
+            "<workspace><list>",
+            "<pane><list><--workspace><w1>",
+            "<pane><report-metadata><w1:p1><--source><session-sounds><--token><sound=Warm Bell><--display-agent><codex · Warm Bell><--agent><codex><--applies-to-source><native><--seq><101><--ttl-ms><86400000>",
+            "<pane><report-metadata><w1:p1><--source><session-sounds><--clear-token><sound><--clear-display-agent><--agent><codex><--applies-to-source><native><--seq><102>",
+        ]
+    );
 }
 
 #[test]
@@ -97,6 +96,10 @@ printf '\n' >> "$capture"
         .unwrap();
 
     let argv = fs::read_to_string(dir.path().join("argv.log")).unwrap();
-    assert!(!argv.contains("<--agent>"));
-    assert!(!argv.contains("<--applies-to-source>"));
+    assert_eq!(
+        argv.lines().collect::<Vec<_>>(),
+        vec![
+            "<pane><report-metadata><w1:p1><--source><session-sounds><--token><sound=Warm Bell><--display-agent><Agent · Warm Bell><--seq><1><--ttl-ms><86400000>"
+        ]
+    );
 }
