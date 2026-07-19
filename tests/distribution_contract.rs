@@ -6,9 +6,15 @@ fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+fn normalize_contract_text(text: String) -> String {
+    text.replace("\r\n", "\n")
+}
+
 fn read(path: impl AsRef<Path>) -> String {
     let path = path.as_ref();
-    fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+    normalize_contract_text(
+        fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display())),
+    )
 }
 
 fn strings(value: &toml::Value) -> Vec<String> {
@@ -26,6 +32,14 @@ fn cargo_version() -> String {
         .as_str()
         .expect("package.version")
         .to_owned()
+}
+
+#[test]
+fn text_contracts_normalize_windows_line_endings() {
+    assert_eq!(
+        normalize_contract_text("permissions:\r\n      contents: write\r\n".to_owned()),
+        "permissions:\n      contents: write\n"
+    );
 }
 
 #[test]
