@@ -1,0 +1,62 @@
+id = "chrispachulski.session-sounds"
+name = "Session Sounds"
+version = "1.0.0"
+min_herdr_version = "0.7.4"
+description = "Give each Herdr agent session a stable sound identity and hear when background work completes or blocks."
+platforms = ["linux", "macos"]
+
+[[build]]
+platforms = ["linux", "macos"]
+command = ["sh", "scripts/install-unix.sh"]
+
+[[build]]
+platforms = ["windows"]
+command = ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/install-windows.ps1"]
+
+[[events]]
+on = "pane.agent_detected"
+command = ["bin/session-sounds", "event"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["bin/session-sounds", "event"]
+
+[[events]]
+on = "pane.moved"
+command = ["bin/session-sounds", "event"]
+
+[[events]]
+on = "pane.exited"
+command = ["bin/session-sounds", "event"]
+
+[[events]]
+on = "pane.closed"
+command = ["bin/session-sounds", "event"]
+
+[[actions]]
+id = "toggle-mute"
+title = "Toggle Session Sounds"
+description = "Mute or unmute audio and Session Sounds metadata."
+contexts = ["global"]
+command = ["bin/session-sounds", "toggle-mute"]
+
+[[actions]]
+id = "reshuffle"
+title = "Reshuffle session sound"
+description = "Assign a different sound to the selected pane."
+contexts = ["pane"]
+command = ["bin/session-sounds", "reshuffle"]
+
+[[actions]]
+id = "test-sound"
+title = "Test session sound"
+description = "Play the selected pane's sound, or the theme's first sound."
+contexts = ["pane"]
+command = ["bin/session-sounds", "test-sound"]
+
+[[actions]]
+id = "doctor"
+title = "Check Session Sounds setup"
+description = "Inspect environment, theme, state, audio, and Herdr native-sound configuration."
+contexts = ["global", "workspace"]
+command = ["bin/session-sounds", "doctor"]

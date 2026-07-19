@@ -1,369 +1,154 @@
-# session-sounds
+# Session Sounds for Herdr
 
-<!-- Badges -->
-![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square)
-![Platform: Windows | macOS | Linux](https://img.shields.io/badge/platform-windows%20%7C%20macos%20%7C%20linux-lightgrey?style=flat-square)
-![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)
-![Dependencies: zero](https://img.shields.io/badge/dependencies-zero-brightgreen?style=flat-square)
+Session Sounds gives every Herdr agent session a stable tone and uses that tone when the session needs your attention in the background. Herdr's native background notification is one shared sound; this plugin keeps parallel Claude, Codex, and other detected sessions audibly distinct.
 
-Stop confusing your terminal tabs when running parallel AI sessions.
-session-sounds assigns each [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://openai.com/index/introducing-codex/) session a unique sound identity -- a name on the terminal tab and a notification tone after every response -- so you always know which session is which.
+It also decorates Herdr's agent label and metadata token with the assigned sound name, such as `codex · Warm Bell` and `sound=Warm Bell`.
 
-<!-- Demo GIF: record 15-sec showing 3-4 named tabs -->
+## Platform status
 
----
+| Platform | Status | Playback |
+| --- | --- | --- |
+| macOS arm64/x86_64 | Supported with Herdr 0.7.4+ | `afplay` |
+| Linux arm64/x86_64 | Supported with Herdr 0.7.4+ | `pw-play`, then `paplay`, then `aplay` |
+| Windows x86_64 | Preview build only | WinMM |
 
-## What you get
-
-- **Named terminal tabs** -- each session gets a unique label (no more "bash", "bash", "bash")
-- **Per-response notification sounds** -- distinct audio for each session so you can work elsewhere and know which one finished
-- **Event-type sounds** -- different tones for completion, errors, and approval prompts
-- **Sound deduplication** -- concurrent sessions never share the same sound; assignments are reclaimed when sessions end
-- **Agent-agnostic** -- one launcher for both Claude Code and Codex
-- **Zero dependencies** -- stdlib only, Python, nothing to install beyond Python itself
-- **Windows-first** -- built and tested on Windows, works on macOS and Linux too
-
----
-
-## Why session-sounds?
-
-Terminal tab naming is the [most-discussed UX pain point](https://github.com/anthropics/claude-code/issues/7229) for Claude Code power users running multiple sessions. Most tools in this space focus on entertainment or gamification. session-sounds focuses on a simpler problem: telling your sessions apart.
-
-| | session-sounds | Notification-only tools | No tooling |
-|---|---|---|---|
-| Named terminal tabs | Yes | No | No |
-| Sound deduplication across sessions | Yes | No | N/A |
-| Event-type sounds (error/approval) | Yes | Some | N/A |
-| Windows support | Native | Rare | N/A |
-| Codex support (incl. Windows) | Yes | No | N/A |
-| Dependencies | 0 (stdlib) | Varies | N/A |
-| Approach | Session identity | Entertainment | -- |
-
----
+Windows binaries, checksums, installer logic, and CI coverage are included for future use. Herdr 0.7.4 cannot reliably resolve a plugin-relative executable before applying the plugin working directory on Windows, so the marketplace manifest intentionally enables the runtime only on Linux and macOS. Windows should not be treated as supported until Herdr fixes that launcher behavior and this manifest raises its minimum version.
 
 ## Install
 
-```bash
-git clone https://github.com/ChrisPachulski/session-sounds.git
-cd session-sounds
-python install_claude_sounds.py
+Requirements:
+
+- Herdr 0.7.4 or newer
+- macOS or Linux for the supported marketplace runtime
+- On Linux, one supported audio player on `PATH`: `pw-play`, `paplay`, or `aplay`
+
+First disable Herdr's one shared background sound in your Herdr `config.toml`:
+
+```toml
+[ui.sound]
+enabled = false
 ```
 
-The installer does five things:
+Then reload Herdr and install the plugin:
 
-1. Copies sound files and scripts to `~/.claude/sounds/`
-2. Adds hooks to `~/.claude/settings.json` (merged with your existing config)
-3. Adds `claude` and `codex` shell wrappers to your profile (PowerShell, bash, or zsh)
-4. Configures VS Code terminal tab titles (if VS Code is installed)
-5. Disables Codex's native title animation in `~/.codex/config.toml` (prevents title fight)
-
-Open a new terminal and type `claude`. That is it.
-
-To uninstall or check status:
-
-```bash
-python install_claude_sounds.py uninstall
-python install_claude_sounds.py status
+```sh
+herdr server reload-config
+herdr plugin install ChrisPachulski/session-sounds
 ```
 
-### Quick reference
+Herdr's marketplace discovers public repositories; marketplace entries are not a promise that the source has received centralized review. Inspect this repository and its release workflow before installing. Installers download only the version declared in `Cargo.toml`, verify the matching entry in the release's `SHA256SUMS`, and replace the plugin binary only after verification succeeds.
 
-| Want | Do |
-|---|---|
-| Disable everything | Set `SESSION_SOUNDS_DISABLED=1` in your environment |
-| Re-enable | Unset the variable |
-| Disable for one session | `SESSION_SOUNDS_DISABLED=1 claude` |
-| Switch to personal sounds | Set `SESSION_SOUNDS_THEME=personal` + add WAVs to `sounds/themes/personal/` |
-| Create a new theme | Create `sounds/themes/<name>/` with WAVs + `theme.json` |
-| Sounds + tab names | `claude` or `codex` -- just launch normally |
+Run the **Check Session Sounds setup** action after installation. Its `doctor` command reports the plugin environment, active theme, state, audio backend, and native Herdr sound setting. It never edits Herdr's configuration.
 
-### Requirements
+## Behavior
 
-- Python 3.10+
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://openai.com/index/introducing-codex/) on your PATH
-- Audio playback:
+Session Sounds listens to Herdr's agent-detected, agent-status, pane-move, pane-exit, and pane-close events. An assignment follows the durable agent session when available and falls back to the terminal identity when necessary.
 
-| Platform | Player | Notes |
-|---|---|---|
-| Windows | `winsound` | Built-in, nothing to install |
-| macOS | `afplay` | Built-in |
-| Linux | `paplay`, `pw-play`, or `aplay` | Auto-detected: PulseAudio, PipeWire, or ALSA |
+- The first seven concurrent assignments receive different bundled tones.
+- When more than seven sessions are live, the least-recently assigned tone is reused.
+- A sound plays when background work changes from working or blocked to done, or when an existing run newly becomes blocked.
+- Initial detection is silent. A pane visible in the focused workspace's active tab is also silent, including a visible split that is not focused.
+- A 1.5-second per-session debounce suppresses duplicate notifications without swallowing later work cycles.
+- Audio and metadata errors are warnings. They never fail or stop the underlying agent.
+- Muting clears Session Sounds metadata as well as suppressing playback; unmuting restores decoration on later events.
 
----
+### Actions
 
-## Adding your own sounds
+| Action | Context | Result |
+| --- | --- | --- |
+| **Toggle Session Sounds** (`toggle-mute`) | Global | Atomically mute or unmute playback and decoration |
+| **Reshuffle session sound** (`reshuffle`) | Pane | Give the selected session a different available tone |
+| **Test session sound** (`test-sound`) | Pane | Play its assigned tone, or the theme's first tone |
+| **Check Session Sounds setup** (`doctor`) | Global or workspace | Read-only environment and configuration diagnostics |
 
-Drop `.wav` files into `~/.claude/sounds/`. The filename becomes the display name:
+## Personal themes
 
-```
-cool_cat.wav      ->  "Cool Cat"
-late_night.wav    ->  "Late Night"
-my_sound.wav      ->  "My Sound"
+Ask Herdr for this plugin's user-owned configuration directory:
+
+```sh
+herdr plugin config-dir chrispachulski.session-sounds
 ```
 
-For custom display names, add entries to the `_DISPLAY_NAMES` dictionary in `sound_manager.py`.
-
-Sound file requirements:
-- WAV format (44100 Hz, mono, 16-bit PCM recommended)
-- Under 5 seconds
-- Normalize to comfortable volume -- synthesized tones peak around 30-45%, extracted clips may need higher peaks for equivalent perceived loudness
-
-### Sound themes
-
-session-sounds ships with a `default` theme and an empty `personal` theme.
-
-To use your own sounds, copy WAV files into `~/.claude/sounds/themes/personal/`, create a `theme.json` with display name mappings, and set:
-
-```bash
-export SESSION_SOUNDS_THEME=personal
-```
-
-**theme.json format:**
+Create a theme under `<config-dir>/themes/<theme-id>/`. This is the exact v1 `theme.json` shape:
 
 ```json
 {
-    "schema_version": 1,
-    "name": "Personal",
-    "description": "My custom sounds",
-    "author": "you",
-    "sounds": {
-        "filename_stem": "Display Name"
-    }
+  "schema_version": 1,
+  "name": "Quiet Desk",
+  "description": "Short tones for shared spaces",
+  "author": "you",
+  "sounds": {
+    "soft_ping": "Soft Ping",
+    "wood_tick": "Wood Tick"
+  }
 }
 ```
 
-Sounds not listed in the `sounds` dict auto-title from filename: `cool_cat.wav` becomes "Cool Cat".
+Place `soft_ping.wav` and `wood_tick.wav` beside that manifest. Every `sounds` key must be one safe filename component without `.wav`, `/`, `\`, or `:`; every display name must be nonempty; and every listed WAV must be a regular file contained in the theme directory. Use short, widely compatible PCM WAV files. The plugin verifies paths and existence, while the platform player decides whether the WAV encoding is playable.
 
-To disable all sounds temporarily:
+Select the theme in `<config-dir>/config.toml`:
 
-```bash
-export SESSION_SOUNDS_DISABLED=1
+```toml
+enabled = true
+theme = "quiet-desk"
 ```
 
-### Creating a personal theme from YouTube
+The default configuration is `enabled = true` and `theme = "default"`. A missing, malformed, empty, or unsafe personal theme produces a warning and falls back to the bundled seven-tone default. The `toggle-mute` action changes `enabled` while preserving the selected theme.
 
-session-sounds ships with authoring tools in `tools/` and AI skills in `.claude/skills/` and `.codex/skills/` so Claude Code or Codex can walk you through the process. But here is the manual workflow:
+## Local development
 
-**1. Download the source audio**
+Linked plugins skip manifest build commands, so populate `bin/` yourself before linking:
 
-```bash
-yt-dlp -x -o "source.%(ext)s" "https://youtube.com/watch?v=VIDEO_ID"
+```sh
+cargo build --release --locked
+mkdir -p bin
+install -m 0755 target/release/session-sounds bin/session-sounds
+herdr plugin link "$(pwd -P)"
 ```
 
-**2. Convert the full file to WAV (do NOT seek into webm -- it produces silence)**
+Useful checks:
 
-```bash
-ffmpeg -y -i source.webm -ar 44100 -ac 1 source_full.wav
+```sh
+cargo fmt --all --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-targets --all-features
+herdr plugin list --plugin chrispachulski.session-sounds --json
+herdr plugin action list --plugin chrispachulski.session-sounds
+herdr plugin log list --plugin chrispachulski.session-sounds --limit 50
 ```
 
-**3. Extract phrase-aligned candidates**
+When finished:
 
-```bash
-python tools/extract_clip.py source_full.wav 10 20 my_sound.wav --candidates 3 --boost 4
+```sh
+herdr plugin unlink chrispachulski.session-sounds
 ```
 
-This analyzes the waveform energy envelope and snaps cuts to natural phrase boundaries instead of arbitrary timestamps. It produces `my_sound_a.wav`, `my_sound_b.wav`, `my_sound_c.wav` for you to audition.
+Do not link over an existing installed registration unless you intend to replace it. Linking and unlinking change the local Herdr registry; unlinking does not delete user-owned config or state directories.
 
-**4. Pick the best clip and move it to your personal theme**
+## Fresh start from the legacy project
 
-```bash
-cp my_sound_a.wav ~/.claude/sounds/themes/personal/my_sound.wav
-```
+Version `v0.9.0-legacy` freezes the former standalone Claude Code/Codex integration. Version 1.0.0 is a clean Herdr plugin and does not import, remove, rewrite, or otherwise manage any legacy installation or configuration. Remove or retain the old setup separately.
 
-**5. Optionally register a custom display name**
+## Privacy and security
 
-Create or edit `~/.claude/sounds/themes/personal/theme.json`:
+- Runtime event handling is offline and has no telemetry.
+- Herdr owns the plugin checkout and supplies its root/config/state paths. Personal themes and `config.toml` live in the plugin config directory; assignments and metadata sequence counters live in the plugin state directory.
+- Install is the network boundary: a release archive and `SHA256SUMS` are downloaded from `ChrisPachulski/session-sounds`, and the archive is not extracted or executed before its exact SHA-256 entry is verified.
+- Playback uses `afplay` on macOS, the first available supported player on Linux, and WinMM in the future-ready Windows binary.
+- Plugin metadata is guarded against the current Herdr agent source and expires after 24 hours if cleanup cannot run.
 
-```json
-{
-    "schema_version": 1,
-    "name": "Personal",
-    "description": "My custom sounds",
-    "author": "you",
-    "sounds": {
-        "my_sound": "My Custom Sound"
-    }
-}
-```
+## Troubleshooting
 
-**6. Activate your personal theme**
+**No sound:** Run **Check Session Sounds setup**. On Linux, install `pw-play` (PipeWire), `paplay` (PulseAudio), or `aplay` (ALSA), then run **Test session sound**.
 
-```bash
-export SESSION_SOUNDS_THEME=personal
-```
+**Two sounds for one completion:** Herdr's native sound is still enabled. Add `[ui.sound]` with `enabled = false` to Herdr's config and run `herdr server reload-config`. `doctor` detects this but deliberately does not edit it.
 
-Or set it permanently in `~/.claude/sounds/config.json`:
+**A personal theme falls back to Default:** Inspect `herdr plugin log list --plugin chrispachulski.session-sounds --limit 50`. Confirm `theme.json` uses schema version 1, contains at least one sound, and every named WAV exists inside that theme directory.
 
-```json
-{"enabled": true, "theme": "personal"}
-```
+**Plugin events or actions do not run:** Confirm it is enabled with `herdr plugin list --plugin chrispachulski.session-sounds --json`, inspect the plugin logs, and remember that a linked checkout needs a manually populated `bin/session-sounds`.
 
-Personal theme WAV files are gitignored and never leave your machine.
-
-**Sound requirements:** WAV, 44100 Hz, mono, 16-bit PCM, under 5 seconds. Sparse/staccato sounds (keyboard stabs, clicks) need full-scale peak (32767) for audibility. Continuous sounds should peak around 16383.
-
-### Sound packs
-
-Sound packs are directories under `~/.claude/sounds/packs/` with a `pack.json` manifest:
-
-```
-packs/
-  retro-arcade/
-    pack.json
-    coin_insert.wav
-    extra_life.wav
-    ...
-```
-
-See the `packs/` directory for examples, including a `windows-native` pack that uses system sounds with zero additional files.
-
----
-
-## Event-type sounds
-
-Every event plays your session's identity sound -- there is no per-event customization today:
-
-| Event | When | Sound |
-|---|---|---|
-| Completion | Agent finishes a response | Your session's identity sound |
-| Start | Session launches | Your session's identity sound |
-| Error | API error or hard failure | Your session's identity sound |
-| Approval | Agent needs your permission | Your session's identity sound |
-| Session end | You close the session | Silent (no sound) |
-
-Completion, start, error, and approval all play the same identity sound assigned to the
-session. Session end is always silent. Dropping WAV files into
-`~/.claude/sounds/events/{event_type}/` has no effect -- the earlier per-event fallback
-tiers were removed.
-
----
-
-<details>
-<summary><strong>How it works</strong></summary>
-
-### Architecture
-
-A single Python launcher (`agent_launcher.py`) manages the full session lifecycle for both agents. No background daemons, no watchdog processes, no external services.
-
-```
-You type "claude" or "codex"
-         |
-         v
-  Shell wrapper calls agent_launcher.py
-         |
-         +-- picks a random sound from the pool
-         +-- reserves it (file lock prevents duplicates)
-         +-- plays startup sound in background thread
-         +-- sets terminal tab name via ANSI escape
-         +-- launches the agent as a child process
-         |
-         v
-  Agent runs, you work
-         |
-         +-- [Claude] hooks fire on each response:
-         |      play sound + refresh tab name
-         |
-         +-- [Codex/Windows] watcher thread tails rollout JSONL:
-         |      detects task_complete events via FindFirstChangeNotificationW
-         |      plays sound + refreshes tab name
-         |
-         v
-  Session ends
-         |
-         +-- assignment file deleted
-         +-- sound returned to the available pool
-```
-
-### Claude Code: hook-based
-
-Claude Code supports [hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) -- shell commands that fire on session events. The installer configures five:
-
-| Hook | Event | Action |
-|------|-------|--------|
-| `SessionStart` | Session opens | Claims the sound reservation from the launcher |
-| `UserPromptSubmit` | Prompt submitted | Re-arms the tab spinner (`spin`) each turn -- no sound |
-| `Stop` | After each response | Plays the completion sound (async) + refreshes tab title |
-| `Notification` | Needs user approval | Plays the approval sound (async) |
-| `StopFailure` | Error or failure | Plays the error sound (async) |
-| `SessionEnd` | Session closes | Plays end sound, releases assignment back to pool |
-
-Hooks work for tab naming because they run as Claude Code subprocesses with PTY access -- even after the TUI takes over the terminal, hook processes can still write ANSI title sequences.
-
-### Codex: JSONL watcher + config
-
-On Windows, Codex has hooks disabled in its Rust binary (`cfg!(windows)`). The launcher compensates with two mechanisms:
-
-1. **Title suppression**: The installer sets `terminal_title = []` in `~/.codex/config.toml`, disabling Codex's native title animation. Without this, Codex's 80ms title updates fight with the session-sounds spinner.
-2. **Watcher thread**: Discovers the active rollout file via `~/.codex/state_5.sqlite` or filesystem scan, then tails the JSONL for `task_started` and `task_complete` events using `FindFirstChangeNotificationW` (Windows) or polling (elsewhere).
-
-On `task_started`, the spinner activates. On `task_complete`, the sound plays and the spinner stops.
-
-### Tab title icons
-
-Each agent has a distinct idle icon so you can tell them apart at a glance:
-
-| Agent | Thinking | Idle |
-|-------|----------|------|
-| Claude | `⠂` / `⠐` alternating at 960ms | `✳ Sound Name` |
-| Codex | 10-frame braille spinner at 80ms | `○ Sound Name` |
-
-### Sound deduplication
-
-Assignments are tracked as JSON files in `~/.claude/sounds/assignments/`. Each file maps a session ID to a sound. When a new session starts, only unassigned sounds are candidates. If all sounds are taken, the pool resets.
-
-Orphan cleanup uses two mechanisms:
-1. **Lock-file liveness detection** (primary): each launcher holds a `.lock_{id}` file open for the session duration. On cleanup, if the lock file can be deleted, the owning process is dead and the assignment is evicted.
-2. **Pressure-based eviction** (backstop): when fewer than 5 sounds remain available, the oldest assignments by mtime are evicted first.
-
-### Process detach
-
-Sound playback uses process detachment so hooks return instantly to Claude Code while the sound plays in the background:
-- Windows: `CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS | CREATE_NO_WINDOW`
-- Unix: `start_new_session=True`
-
-### Tab naming on VS Code
-
-VS Code requires this setting for ANSI title sequences to reach the tab:
-
-```json
-{
-  "terminal.integrated.tabs.title": "${sequence}"
-}
-```
-
-The installer sets this automatically. Works in iTerm2, Terminal.app, and Windows Terminal without additional configuration.
-
-### File inventory
-
-```
-~/.claude/sounds/
-  agent_launcher.py      # Entry point -- launches claude or codex
-  sound_manager.py       # Sound pool, assignment, playback, event resolution
-  pack_loader.py         # Pack discovery, validation, activation
-  native_pack_loader.py  # Platform-native system sound packs
-  pack_schema.json       # JSON Schema for pack.json manifests
-  terminal_title.py      # Per-terminal title setter (Win/Mac/Linux/tmux/kitty)
-  title_hook.py          # Claude hook for terminal title + spinner state
-  tool_context.py        # Command parser and error/outcome detection
-  status_line.py         # Claude Code status bar integration
-  assignments/           # Per-session assignment files (auto-managed)
-  events/                # Event-type default sounds
-    error/default.wav    # Two-note descending buzzy tone
-    approval/default.wav # Rising two-note chime
-    end/default.wav      # Soft descending fade
-  packs/                 # Sound pack directories + manifests
-  *.wav                  # Sound files
-
-tools/                   # Authoring tools (not installed)
-  extract_clip.py        # Phrase-boundary-aware clip extractor
-  generate_event_sounds.py   # Regenerate default event sounds
-  generate_all_sounds.py     # Procedural synthesis reference
-```
-
-</details>
-
----
+**Windows install/runtime fails:** Windows is not a supported Herdr 0.7.4 runtime. The checked release artifact is preview/future-ready, not a workaround for Herdr's plugin-relative launcher issue.
 
 ## License
 
-[MIT](LICENSE)
+The Rust code, scripts, and documentation are MIT licensed; see [LICENSE](LICENSE). The seven WAV files under `sounds/themes/default/` were synthesized for this project and are dedicated to the public domain under CC0 1.0; see [their notice](sounds/themes/default/README.md). No third-party audio is bundled.

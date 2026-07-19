@@ -1,0 +1,154 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate stable release identity
+        id: identity
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Only stable semantic tags are releasable: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          VERSION=${RELEASE_TAG#v}
+          CARGO_VERSION=$(awk '
+            /^\[package\]$/ { package = 1; next }
+            /^\[/ && package { exit }
+            package && /^version[[:space:]]*=/ {
+              value = $0
+              sub(/^[^=]*=[[:space:]]*"/, "", value)
+              sub(/"[[:space:]]*$/, "", value)
+              print value
+              exit
+            }
+          ' Cargo.toml)
+          MANIFEST_VERSION=$(awk -F '"' '/^version[[:space:]]*=/ { print $2; exit }' herdr-plugin.toml)
+          test "$VERSION" = "$CARGO_VERSION"
+          test "$VERSION" = "$MANIFEST_VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: aarch64-apple-darwin
+            binary: session-sounds
+            tool: cargo
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            binary: session-sounds
+            tool: cargo
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            binary: session-sounds
+            tool: cross
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: session-sounds
+            tool: cargo
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: session-sounds.exe
+            tool: cargo
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install cross
+        if: matrix.tool == 'cross'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+      - name: Build with Cargo
+        if: matrix.tool == 'cargo'
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Build Linux ARM64 with cross
+        if: matrix.tool == 'cross'
+        run: cross build --release --locked --target ${{ matrix.target }}
+      - name: Stage Unix binary
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "dist/${{ matrix.target }}"
+          install -m 0755 "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/${{ matrix.target }}/${{ matrix.binary }}"
+      - name: Stage Windows binary
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $Directory = "dist/${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $Directory -Force | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$Directory/${{ matrix.binary }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: dist/${{ matrix.target }}/${{ matrix.binary }}
+          if-no-files-found: error
+
+  publish:
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: inputs
+      - name: Package final archives and checksums
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          REPOSITORY='ChrisPachulski/session-sounds'
+          test "$REPOSITORY" = "$GITHUB_REPOSITORY"
+          mkdir release
+          for TARGET in \
+            aarch64-apple-darwin \
+            x86_64-apple-darwin \
+            aarch64-unknown-linux-gnu \
+            x86_64-unknown-linux-gnu
+          do
+            SOURCE="inputs/binary-${TARGET}/session-sounds"
+            test -f "$SOURCE"
+            chmod 0755 "$SOURCE"
+            tar -C "$(dirname "$SOURCE")" -czf "release/session-sounds-v${VERSION}-${TARGET}.tar.gz" session-sounds
+          done
+          TARGET='x86_64-pc-windows-msvc'
+          SOURCE="inputs/binary-${TARGET}/session-sounds.exe"
+          test -f "$SOURCE"
+          (cd "$(dirname "$SOURCE")" && zip -q "$GITHUB_WORKSPACE/release/session-sounds-v${VERSION}-${TARGET}.zip" session-sounds.exe)
+          (cd release && sha256sum session-sounds-v* > SHA256SUMS)
+          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 6
+          sha256sum --check release/SHA256SUMS
+      - name: Publish one GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release/session-sounds-v*.tar.gz
+            release/session-sounds-v*.zip
+            release/SHA256SUMS
