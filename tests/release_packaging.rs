@@ -111,6 +111,27 @@ fn packages_five_exact_archives_with_license_and_valid_checksums() {
 }
 
 #[test]
+fn packages_with_workflow_relative_paths() {
+    let temporary = tempfile::tempdir().unwrap();
+    fixture_inputs(temporary.path());
+
+    let result = Command::new("sh")
+        .arg(script())
+        .arg(VERSION)
+        .arg("inputs")
+        .arg("release")
+        .current_dir(temporary.path())
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(temporary.path().join("release/SHA256SUMS").is_file());
+}
+
+#[test]
 fn rejects_invalid_version_missing_input_and_preexisting_output() {
     let temporary = tempfile::tempdir().unwrap();
     let inputs = fixture_inputs(temporary.path());

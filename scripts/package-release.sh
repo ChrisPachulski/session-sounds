@@ -44,6 +44,7 @@ cleanup() {
     [ -z "${WORK_DIR:-}" ] || rm -rf "$WORK_DIR"
 }
 trap cleanup EXIT HUP INT TERM
+STAGE_DIR=$(CDPATH='' cd -- "$STAGE_DIR" && pwd -P) || fail "could not resolve release staging directory"
 WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/session-sounds-package.XXXXXX") || fail "could not create package work directory"
 
 for TARGET in \
