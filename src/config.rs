@@ -1,8 +1,13 @@
 use crate::atomic;
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::io;
-use std::path::Path;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct Config {
@@ -26,6 +31,10 @@ pub struct LoadedConfig {
 }
 
 pub fn load_config(config_dir: &Path) -> LoadedConfig {
+    load_config_unlocked(config_dir)
+}
+
+fn load_config_unlocked(config_dir: &Path) -> LoadedConfig {
     let path = config_dir.join("config.toml");
     let text = match fs::read_to_string(&path) {
         Ok(text) => text,
@@ -71,9 +80,56 @@ pub fn load_config(config_dir: &Path) -> LoadedConfig {
 }
 
 pub fn save_config(config_dir: &Path, config: &Config) -> io::Result<()> {
+    ConfigGuard::acquire(config_dir)?.save(config)
+}
+
+pub fn toggle_config(config_dir: &Path) -> io::Result<LoadedConfig> {
+    let guard = ConfigGuard::acquire(config_dir)?;
+    let mut loaded = guard.load();
+    loaded.config.enabled = !loaded.config.enabled;
+    guard.save(&loaded.config)?;
+    Ok(loaded)
+}
+
+pub struct ConfigGuard {
+    directory: PathBuf,
+    lock: File,
+}
+
+impl ConfigGuard {
+    pub fn acquire(config_dir: &Path) -> io::Result<Self> {
+        fs::create_dir_all(config_dir)?;
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(config_dir.join("config.lock"))?;
+        FileExt::lock_exclusive(&lock)?;
+        Ok(Self {
+            directory: config_dir.into(),
+            lock,
+        })
+    }
+
+    pub fn load(&self) -> LoadedConfig {
+        load_config_unlocked(&self.directory)
+    }
+
+    pub fn save(&self, config: &Config) -> io::Result<()> {
+        save_config_unlocked(&self.directory, config)
+    }
+}
+
+impl Drop for ConfigGuard {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.lock);
+    }
+}
+
+fn save_config_unlocked(config_dir: &Path, config: &Config) -> io::Result<()> {
     fs::create_dir_all(config_dir)?;
     let path = config_dir.join("config.toml");
-    let temporary = config_dir.join(".config.toml.tmp");
     let mut table = fs::read_to_string(&path)
         .ok()
         .and_then(|text| text.parse::<toml::Table>().ok())
@@ -81,6 +137,33 @@ pub fn save_config(config_dir: &Path, config: &Config) -> io::Result<()> {
     table.insert("enabled".into(), toml::Value::Boolean(config.enabled));
     table.insert("theme".into(), toml::Value::String(config.theme.clone()));
     let text = toml::to_string(&table).map_err(io::Error::other)?;
-    fs::write(&temporary, text)?;
-    atomic::replace(&temporary, &path)
+    let (temporary, mut file) = create_temporary(config_dir)?;
+    if let Err(error) = (|| {
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        atomic::replace(&temporary, &path)
+    })() {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn create_temporary(config_dir: &Path) -> io::Result<(PathBuf, File)> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    loop {
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = config_dir.join(format!(
+            ".config.{}.{now}.{counter}.tmp",
+            std::process::id()
+        ));
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => return Ok((path, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
 }

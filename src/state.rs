@@ -2,7 +2,7 @@ use crate::atomic;
 use crate::theme::Sound;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -54,6 +54,7 @@ impl IdentityKey {
 pub struct PaneIdentity {
     pub key: IdentityKey,
     pub agent: String,
+    pub agent_source: Option<String>,
     pub terminal_id: Option<String>,
     pub pane_id: String,
     pub workspace_id: Option<String>,
@@ -63,6 +64,8 @@ pub struct PaneIdentity {
 pub struct Assignment {
     pub identity: IdentityKey,
     pub agent: String,
+    #[serde(default)]
+    pub agent_source: Option<String>,
     pub terminal_id: Option<String>,
     pub pane_id: String,
     pub workspace_id: Option<String>,
@@ -74,12 +77,16 @@ pub struct Assignment {
     pub completion_handled: bool,
     #[serde(default)]
     pub blocked_handled: bool,
+    #[serde(default)]
+    pub last_event_status: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct State {
     pub version: u32,
     pub assignments: Vec<Assignment>,
+    #[serde(default)]
+    pub metadata_sequences: BTreeMap<String, u64>,
 }
 
 impl Default for State {
@@ -87,6 +94,7 @@ impl Default for State {
         Self {
             version: STATE_VERSION,
             assignments: Vec::new(),
+            metadata_sequences: BTreeMap::new(),
         }
     }
 }
@@ -104,8 +112,13 @@ pub fn assign_sound<'a>(
     now_ms: u64,
 ) -> &'a mut Assignment {
     assert!(!sounds.is_empty(), "validated theme has no sounds");
+    let terminal_agent_replacement = matches!(pane.key, IdentityKey::Terminal { .. })
+        && state
+            .assignments
+            .iter()
+            .any(|assignment| assignment.identity == pane.key && assignment.agent != pane.agent);
     state.assignments.retain(|assignment| {
-        if assignment.identity == pane.key {
+        if assignment.identity == pane.key && !terminal_agent_replacement {
             return true;
         }
         let same_pane = assignment.pane_id == pane.pane_id;
@@ -126,6 +139,7 @@ pub fn assign_sound<'a>(
             (!sound_is_valid).then(|| choose_sound(&state.assignments, sounds).to_owned());
         let assignment = &mut state.assignments[index];
         assignment.agent.clone_from(&pane.agent);
+        assignment.agent_source.clone_from(&pane.agent_source);
         assignment.terminal_id.clone_from(&pane.terminal_id);
         assignment.pane_id.clone_from(&pane.pane_id);
         assignment.workspace_id.clone_from(&pane.workspace_id);
@@ -140,6 +154,7 @@ pub fn assign_sound<'a>(
     state.assignments.push(Assignment {
         identity: pane.key.clone(),
         agent: pane.agent.clone(),
+        agent_source: pane.agent_source.clone(),
         terminal_id: pane.terminal_id.clone(),
         pane_id: pane.pane_id.clone(),
         workspace_id: pane.workspace_id.clone(),
@@ -149,6 +164,7 @@ pub fn assign_sound<'a>(
         status: None,
         completion_handled: false,
         blocked_handled: false,
+        last_event_status: None,
     });
     state.assignments.last_mut().expect("assignment was pushed")
 }
@@ -182,14 +198,39 @@ pub fn reshuffle_pane(
     sounds: &[Sound],
     now_ms: u64,
 ) -> Option<String> {
-    let assignment = state
+    let index = state
         .assignments
-        .iter_mut()
-        .find(|assignment| assignment.pane_id == pane_id)?;
-    let replacement = sounds
         .iter()
-        .find(|sound| sound.id != assignment.sound_id)
-        .or_else(|| sounds.first())?;
+        .position(|assignment| assignment.pane_id == pane_id)?;
+    let current = state.assignments[index].sound_id.as_str();
+    let replacement = if state.assignments.len() <= sounds.len() {
+        sounds.iter().find(|sound| {
+            sound.id != current
+                && state
+                    .assignments
+                    .iter()
+                    .enumerate()
+                    .all(|(other_index, assignment)| {
+                        other_index == index || assignment.sound_id != sound.id
+                    })
+        })
+    } else {
+        sounds
+            .iter()
+            .filter(|sound| sound.id != current)
+            .min_by_key(|sound| {
+                state
+                    .assignments
+                    .iter()
+                    .filter(|assignment| assignment.sound_id == sound.id)
+                    .map(|assignment| assignment.assigned_at_ms)
+                    .max()
+                    .unwrap_or(0)
+            })
+    }
+    .or_else(|| sounds.iter().find(|sound| sound.id != current))
+    .or_else(|| sounds.first())?;
+    let assignment = &mut state.assignments[index];
     assignment.sound_id.clone_from(&replacement.id);
     assignment.assigned_at_ms = now_ms;
     Some(assignment.sound_id.clone())
@@ -208,16 +249,33 @@ pub fn move_pane(
     previous_pane_id: &str,
     pane_id: &str,
     workspace_id: Option<&str>,
+    terminal_id: Option<&str>,
 ) -> bool {
-    let Some(assignment) = state
+    let Some(identity) = state
         .assignments
-        .iter_mut()
+        .iter()
         .find(|assignment| assignment.pane_id == previous_pane_id)
+        .map(|assignment| assignment.identity.clone())
     else {
         return false;
     };
+    state.assignments.retain(|assignment| {
+        assignment.identity == identity
+            || (assignment.pane_id != pane_id
+                && terminal_id.is_none_or(|terminal_id| {
+                    assignment.terminal_id.as_deref() != Some(terminal_id)
+                }))
+    });
+    let assignment = state
+        .assignments
+        .iter_mut()
+        .find(|assignment| assignment.identity == identity)
+        .expect("moving assignment was retained");
     assignment.pane_id = pane_id.into();
     assignment.workspace_id = workspace_id.map(str::to_owned);
+    if let Some(terminal_id) = terminal_id {
+        assignment.terminal_id = Some(terminal_id.into());
+    }
     true
 }
 
@@ -292,34 +350,78 @@ pub fn apply_status_observation(
     let Some(current) = current else {
         return false;
     };
+    let event_is_duplicate =
+        event_status.is_some() && event_status == assignment.last_event_status.as_deref();
     match current {
         "done" => {
-            if assignment.status.as_deref() == Some("done") && assignment.completion_handled {
-                return false;
-            }
-            if !matches!(assignment.status.as_deref(), Some("working" | "blocked")) {
+            if !event_is_duplicate {
                 if let Some(historical @ ("working" | "blocked")) =
                     event_status.filter(|event_status| *event_status != current)
                 {
                     set_historical_status(assignment, historical);
                 }
             }
+            if !matches!(assignment.status.as_deref(), Some("working" | "blocked"))
+                && !assignment.completion_handled
+            {
+                set_historical_status(assignment, "working");
+            }
         }
         "blocked" => {
-            if assignment.status.as_deref() == Some("blocked") && assignment.blocked_handled {
-                return false;
-            }
-            if assignment.status.is_none() || assignment.status.as_deref() == Some("blocked") {
+            if !event_is_duplicate {
                 if let Some(historical) = event_status
                     .filter(|event_status| *event_status != "blocked" && known_status(event_status))
                 {
                     set_historical_status(assignment, historical);
                 }
             }
+            if assignment.status.as_deref() != Some("working") && !assignment.blocked_handled {
+                set_historical_status(assignment, "working");
+            }
         }
         _ => {}
     }
-    apply_status(assignment, current, target_visible, now_ms)
+    let play = apply_status(assignment, current, target_visible, now_ms);
+    if let Some(event_status) = event_status {
+        assignment.last_event_status = Some(event_status.into());
+    }
+    play
+}
+
+pub fn apply_detection_observation(
+    assignment: &mut Assignment,
+    event_status: Option<&str>,
+    live_status: Option<&str>,
+    _target_visible: bool,
+    _now_ms: u64,
+) -> bool {
+    let event_status = event_status.filter(|status| known_status(status));
+    let current = live_status
+        .filter(|status| known_status(status))
+        .or(event_status);
+    let Some(current) = current else {
+        return false;
+    };
+    let previous = assignment.status.as_deref();
+    if current != "done" || previous != Some("done") {
+        assignment.completion_handled = false;
+    }
+    if current != "blocked" || previous != Some("blocked") {
+        assignment.blocked_handled = false;
+    }
+    assignment.status = Some(current.into());
+    if let Some(event_status) = event_status {
+        assignment.last_event_status = Some(event_status.into());
+    }
+    false
+}
+
+pub fn next_metadata_seq(state: &mut State, terminal_id: &str, source: &str, now_ms: u64) -> u64 {
+    let key = format!("{terminal_id}\u{0}{source}");
+    let previous = state.metadata_sequences.get(&key).copied().unwrap_or(0);
+    let next = previous.saturating_add(1).max(now_ms);
+    state.metadata_sequences.insert(key, next);
+    next
 }
 
 fn known_status(status: &str) -> bool {
@@ -358,6 +460,13 @@ impl StateStore {
         &self,
         operation: impl FnOnce(&mut State) -> io::Result<T>,
     ) -> io::Result<T> {
+        let mut guard = self.lock()?;
+        let result = operation(guard.state_mut())?;
+        guard.commit()?;
+        Ok(result)
+    }
+
+    pub fn lock(&self) -> io::Result<StateGuard> {
         fs::create_dir_all(&self.directory)?;
         let file = OpenOptions::new()
             .create(true)
@@ -366,19 +475,39 @@ impl StateStore {
             .write(true)
             .open(self.directory.join("state.lock"))?;
         FileExt::lock_exclusive(&file)?;
-        let _lock = LockGuard(file);
         let mut state = self.read()?.state;
-        let result = operation(&mut state)?;
-        atomic_write(&self.directory, &state)?;
-        Ok(result)
+        state.version = STATE_VERSION;
+        Ok(StateGuard {
+            directory: self.directory.clone(),
+            state,
+            lock: file,
+        })
     }
 }
 
-struct LockGuard(File);
+pub struct StateGuard {
+    directory: PathBuf,
+    state: State,
+    lock: File,
+}
 
-impl Drop for LockGuard {
+impl StateGuard {
+    pub fn state(&self) -> &State {
+        &self.state
+    }
+
+    pub fn state_mut(&mut self) -> &mut State {
+        &mut self.state
+    }
+
+    pub fn commit(&mut self) -> io::Result<()> {
+        atomic_write(&self.directory, &self.state)
+    }
+}
+
+impl Drop for StateGuard {
     fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.0);
+        let _ = FileExt::unlock(&self.lock);
     }
 }
 

@@ -118,7 +118,7 @@ fn load_manifest(id: &str, directory: PathBuf) -> Result<Theme, String> {
         sounds.push(Sound {
             id: sound_id,
             display_name: display_name.to_owned(),
-            path: sound_path,
+            path: canonical_sound,
         });
     }
     Ok(Theme {

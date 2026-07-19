@@ -11,6 +11,8 @@ pub struct AgentSession {
     #[serde(default)]
     pub kind: String,
     #[serde(default)]
+    pub source: String,
+    #[serde(default)]
     pub value: String,
 }
 
@@ -40,16 +42,27 @@ impl PaneInfo {
         let raw_agent = self
             .agent
             .as_deref()
-            .or_else(|| session.map(|session| session.agent.as_str()))?;
+            .filter(|agent| !agent.is_empty())
+            .or_else(|| {
+                session
+                    .map(|session| session.agent.as_str())
+                    .filter(|agent| !agent.is_empty())
+            });
         let key = IdentityKey::from_parts(
-            Some(raw_agent),
+            raw_agent,
             session.map(|session| session.kind.as_str()),
             session.map(|session| session.value.as_str()),
             Some(self.terminal_id.as_str()),
         )?;
         Some(PaneIdentity {
             key,
-            agent: raw_agent.into(),
+            agent: raw_agent.unwrap_or_default().into(),
+            agent_source: raw_agent.and_then(|_| {
+                session
+                    .map(|session| session.source.as_str())
+                    .filter(|source| !source.is_empty())
+                    .map(str::to_owned)
+            }),
             terminal_id: (!self.terminal_id.is_empty()).then(|| self.terminal_id.clone()),
             pane_id: self.pane_id.clone(),
             workspace_id: (!self.workspace_id.is_empty()).then(|| self.workspace_id.clone()),
@@ -107,15 +120,26 @@ pub struct Metadata {
     pub source: String,
     pub token: String,
     pub display_agent: String,
-    pub raw_agent: String,
+    pub raw_agent: Option<String>,
+    pub applies_to_source: Option<String>,
+    pub seq: u64,
     pub ttl_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MetadataClear {
+    pub pane_id: String,
+    pub source: String,
+    pub raw_agent: Option<String>,
+    pub applies_to_source: Option<String>,
+    pub seq: u64,
 }
 
 pub trait Herdr {
     fn pane_info(&self, pane_id: &str) -> Result<PaneInfo, String>;
     fn live_snapshot(&self) -> Result<LiveSnapshot, String>;
     fn report_metadata(&self, metadata: &Metadata) -> Result<(), String>;
-    fn clear_metadata(&self, pane_id: &str, raw_agent: &str) -> Result<(), String>;
+    fn clear_metadata(&self, metadata: &MetadataClear) -> Result<(), String>;
 }
 
 #[derive(Clone, Debug)]
@@ -176,36 +200,60 @@ impl Herdr for ProcessHerdr {
     }
 
     fn report_metadata(&self, metadata: &Metadata) -> Result<(), String> {
-        self.status(&[
-            "pane",
-            "report-metadata",
-            &metadata.pane_id,
-            "--source",
-            &metadata.source,
-            "--token",
-            &metadata.token,
-            "--display-agent",
-            &metadata.display_agent,
-            "--agent",
-            &metadata.raw_agent,
-            "--ttl-ms",
-            &metadata.ttl_ms.to_string(),
-        ])
+        let mut arguments = vec![
+            "pane".to_owned(),
+            "report-metadata".to_owned(),
+            metadata.pane_id.clone(),
+            "--source".to_owned(),
+            metadata.source.clone(),
+            "--token".to_owned(),
+            metadata.token.clone(),
+            "--display-agent".to_owned(),
+            metadata.display_agent.clone(),
+        ];
+        add_agent_guards(
+            &mut arguments,
+            metadata.raw_agent.as_deref(),
+            metadata.applies_to_source.as_deref(),
+        );
+        arguments.extend([
+            "--seq".to_owned(),
+            metadata.seq.to_string(),
+            "--ttl-ms".to_owned(),
+            metadata.ttl_ms.to_string(),
+        ]);
+        let arguments: Vec<_> = arguments.iter().map(String::as_str).collect();
+        self.status(&arguments)
     }
 
-    fn clear_metadata(&self, pane_id: &str, raw_agent: &str) -> Result<(), String> {
-        self.status(&[
-            "pane",
-            "report-metadata",
-            pane_id,
-            "--source",
-            "session-sounds",
-            "--clear-token",
-            "sound",
-            "--clear-display-agent",
-            "--agent",
-            raw_agent,
-        ])
+    fn clear_metadata(&self, metadata: &MetadataClear) -> Result<(), String> {
+        let mut arguments = vec![
+            "pane".to_owned(),
+            "report-metadata".to_owned(),
+            metadata.pane_id.clone(),
+            "--source".to_owned(),
+            metadata.source.clone(),
+            "--clear-token".to_owned(),
+            "sound".to_owned(),
+            "--clear-display-agent".to_owned(),
+        ];
+        add_agent_guards(
+            &mut arguments,
+            metadata.raw_agent.as_deref(),
+            metadata.applies_to_source.as_deref(),
+        );
+        arguments.extend(["--seq".to_owned(), metadata.seq.to_string()]);
+        let arguments: Vec<_> = arguments.iter().map(String::as_str).collect();
+        self.status(&arguments)
+    }
+}
+
+fn add_agent_guards(arguments: &mut Vec<String>, agent: Option<&str>, source: Option<&str>) {
+    if let Some(agent) = agent.filter(|agent| !agent.is_empty()) {
+        arguments.extend(["--agent".to_owned(), agent.to_owned()]);
+        if let Some(source) = source.filter(|source| !source.is_empty()) {
+            arguments.extend(["--applies-to-source".to_owned(), source.to_owned()]);
+        }
     }
 }
 

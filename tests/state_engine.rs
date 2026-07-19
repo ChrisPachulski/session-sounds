@@ -1,7 +1,7 @@
 use session_sounds::state::{
-    apply_status, apply_status_observation, assign_sound, cleanup_pane, move_pane,
-    reconcile_under_pressure, reshuffle_pane, IdentityKey, LivePane, PaneIdentity, State,
-    StateStore,
+    apply_detection_observation, apply_status, apply_status_observation, assign_sound,
+    cleanup_pane, move_pane, next_metadata_seq, reconcile_under_pressure, reshuffle_pane,
+    IdentityKey, LivePane, PaneIdentity, State, StateStore,
 };
 use session_sounds::theme::Sound;
 use std::collections::HashSet;
@@ -29,6 +29,7 @@ fn pane(number: usize) -> PaneIdentity {
             session_value: format!("session-{number}"),
         },
         agent: "codex".into(),
+        agent_source: Some("native".into()),
         terminal_id: Some(format!("term-{number}")),
         pane_id: format!("w1:p{number}"),
         workspace_id: Some("w1".into()),
@@ -68,6 +69,57 @@ fn replacement_in_same_pane_or_terminal_evicts_old_identity() {
 
     assert_eq!(state.assignments.len(), 1);
     assert_eq!(state.assignments[0].identity, replacement.key);
+}
+
+#[test]
+fn different_agent_on_same_terminal_is_a_fresh_assignment() {
+    let pool = sounds(2);
+    let mut state = State::default();
+    let mut first = pane(1);
+    first.key = IdentityKey::Terminal {
+        terminal_id: "term-shared".into(),
+    };
+    first.terminal_id = Some("term-shared".into());
+    let assignment = assign_sound(&mut state, &first, &pool, 10);
+    assignment.status = Some("done".into());
+    assignment.last_played_at_ms = Some(10);
+    assignment.completion_handled = true;
+
+    let mut replacement = first.clone();
+    replacement.agent = "claude".into();
+    let replacement = assign_sound(&mut state, &replacement, &pool, 20);
+
+    assert_eq!(replacement.agent, "claude");
+    assert_eq!(replacement.status, None);
+    assert_eq!(replacement.last_played_at_ms, None);
+    assert!(!replacement.completion_handled);
+    assert_eq!(replacement.assigned_at_ms, 20);
+}
+
+#[test]
+fn newly_authoritative_agent_on_terminal_fallback_is_a_fresh_assignment() {
+    let pool = sounds(2);
+    let mut state = State::default();
+    let mut unknown = pane(1);
+    unknown.key = IdentityKey::Terminal {
+        terminal_id: "term-shared".into(),
+    };
+    unknown.terminal_id = Some("term-shared".into());
+    unknown.agent.clear();
+    let assignment = assign_sound(&mut state, &unknown, &pool, 10);
+    assignment.status = Some("done".into());
+    assignment.last_played_at_ms = Some(10);
+    assignment.completion_handled = true;
+
+    let mut identified = unknown;
+    identified.agent = "codex".into();
+    let assignment = assign_sound(&mut state, &identified, &pool, 20);
+
+    assert_eq!(assignment.agent, "codex");
+    assert_eq!(assignment.status, None);
+    assert_eq!(assignment.last_played_at_ms, None);
+    assert!(!assignment.completion_handled);
+    assert_eq!(assignment.assigned_at_ms, 20);
 }
 
 #[test]
@@ -141,6 +193,7 @@ fn reshuffle_changes_only_context_pane_and_avoids_current_sound() {
     let new = reshuffle_pane(&mut state, "w1:p1", &pool, 30).unwrap();
 
     assert_ne!(new, old);
+    assert_eq!(new, "sound-2");
     assert_eq!(state.assignments[1], before_other);
 }
 
@@ -150,12 +203,38 @@ fn cleanup_is_idempotent_and_move_updates_only_the_current_address() {
     let mut state = State::default();
     assign_sound(&mut state, &pane(1), &pool, 10);
 
-    assert!(move_pane(&mut state, "w1:p1", "w2:p8", Some("w2")));
+    assert!(move_pane(
+        &mut state,
+        "w1:p1",
+        "w2:p8",
+        Some("w2"),
+        Some("term-8"),
+    ));
     assert_eq!(state.assignments[0].pane_id, "w2:p8");
     assert_eq!(state.assignments[0].workspace_id.as_deref(), Some("w2"));
     assert!(!cleanup_pane(&mut state, "w1:p1"));
     assert!(cleanup_pane(&mut state, "w2:p8"));
     assert!(!cleanup_pane(&mut state, "w2:p8"));
+}
+
+#[test]
+fn move_evicts_a_different_assignment_at_the_destination_address() {
+    let pool = sounds(3);
+    let mut state = State::default();
+    assign_sound(&mut state, &pane(1), &pool, 10);
+    assign_sound(&mut state, &pane(2), &pool, 20);
+
+    assert!(move_pane(
+        &mut state,
+        "w1:p1",
+        "w1:p2",
+        Some("w1"),
+        Some("term-2"),
+    ));
+
+    assert_eq!(state.assignments.len(), 1);
+    assert_eq!(state.assignments[0].identity, pane(1).key);
+    assert_eq!(state.assignments[0].pane_id, "w1:p2");
 }
 
 #[test]
@@ -206,6 +285,27 @@ fn corrupt_state_reconstructs_and_atomic_round_trip_preserves_data() {
     assert!(loaded.warning.is_none());
     assert_eq!(loaded.state.assignments.len(), 1);
     assert_eq!(loaded.state.version, 1);
+}
+
+#[test]
+fn metadata_sequences_are_monotonic_per_terminal_and_default_in_v1_state() {
+    let legacy: State = serde_json::from_str(r#"{"version":1,"assignments":[]}"#).unwrap();
+    assert!(legacy.metadata_sequences.is_empty());
+    let mut state = legacy;
+
+    assert_eq!(
+        next_metadata_seq(&mut state, "term-1", "session-sounds", 100),
+        100
+    );
+    assert_eq!(
+        next_metadata_seq(&mut state, "term-1", "session-sounds", 100),
+        101
+    );
+    assert_eq!(
+        next_metadata_seq(&mut state, "term-2", "session-sounds", 50),
+        50
+    );
+    assert_eq!(next_metadata_seq(&mut state, "term-1", "other", 7), 7);
 }
 
 #[test]
@@ -297,6 +397,109 @@ fn blocked_plays_only_on_transition_while_target_is_background() {
 }
 
 #[test]
+fn initial_authoritative_status_change_to_final_state_alerts_once() {
+    let pool = sounds(1);
+    let mut state = State::default();
+    let assignment = assign_sound(&mut state, &pane(1), &pool, 0);
+
+    assert!(apply_status_observation(
+        assignment,
+        Some("blocked"),
+        Some("blocked"),
+        false,
+        10,
+    ));
+    assert!(!apply_status_observation(
+        assignment,
+        Some("blocked"),
+        Some("blocked"),
+        false,
+        2_000,
+    ));
+}
+
+#[test]
+fn detection_never_alerts_or_consumes_the_following_status_change() {
+    let pool = sounds(1);
+    let mut state = State::default();
+    let assignment = assign_sound(&mut state, &pane(1), &pool, 0);
+    assert!(!apply_status(assignment, "working", false, 1));
+
+    assert!(!apply_detection_observation(
+        assignment,
+        Some("done"),
+        Some("done"),
+        false,
+        2_000,
+    ));
+    assert_eq!(assignment.last_played_at_ms, None);
+    assert!(apply_status_observation(
+        assignment,
+        Some("done"),
+        Some("done"),
+        false,
+        2_001,
+    ));
+    assert!(!apply_detection_observation(
+        assignment,
+        Some("done"),
+        Some("done"),
+        false,
+        3_000,
+    ));
+    assert!(!apply_status_observation(
+        assignment,
+        Some("done"),
+        Some("done"),
+        false,
+        4_000,
+    ));
+}
+
+#[test]
+fn rapid_second_cycle_is_not_permanently_hidden_by_handled_flags() {
+    let pool = sounds(1);
+    let mut state = State::default();
+    let assignment = assign_sound(&mut state, &pane(1), &pool, 0);
+
+    assert!(apply_status_observation(
+        assignment,
+        Some("done"),
+        Some("done"),
+        false,
+        10,
+    ));
+    assert!(!apply_status_observation(
+        assignment,
+        Some("working"),
+        Some("done"),
+        false,
+        20,
+    ));
+    assert!(!apply_status_observation(
+        assignment,
+        Some("done"),
+        Some("done"),
+        false,
+        30,
+    ));
+    assert!(apply_status_observation(
+        assignment,
+        Some("working"),
+        Some("done"),
+        false,
+        2_000,
+    ));
+    assert!(!apply_status_observation(
+        assignment,
+        Some("working"),
+        Some("done"),
+        false,
+        4_000,
+    ));
+}
+
+#[test]
 fn foreground_completion_to_idle_does_not_play() {
     let pool = sounds(1);
     let mut state = State::default();
@@ -322,7 +525,7 @@ fn reversed_status_handlers_converge_on_live_done_and_notify_once() {
     let mut state = State::default();
     let assignment = assign_sound(&mut state, &pane(1), &pool, 0);
 
-    assert!(!apply_status_observation(
+    assert!(apply_status_observation(
         assignment,
         Some("done"),
         Some("done"),
@@ -330,7 +533,7 @@ fn reversed_status_handlers_converge_on_live_done_and_notify_once() {
         10,
     ));
     assert_eq!(assignment.status.as_deref(), Some("done"));
-    assert!(apply_status_observation(
+    assert!(!apply_status_observation(
         assignment,
         Some("working"),
         Some("done"),

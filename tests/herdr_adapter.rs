@@ -1,4 +1,5 @@
 use session_sounds::herdr::{parse_pane_response, parse_snapshot_responses};
+use session_sounds::state::IdentityKey;
 
 #[test]
 fn pane_parser_reads_live_074_shape_and_durable_session() {
@@ -32,4 +33,22 @@ fn unfocused_split_in_focused_workspaces_active_tab_is_visible() {
     .unwrap();
 
     assert!(snapshot.pane_visible("w1:p2"));
+}
+
+#[test]
+fn terminal_identity_survives_missing_agent_without_inventing_a_guard() {
+    let pane = parse_pane_response(
+        r#"{"result":{"pane":{"pane_id":"w1:p1","terminal_id":"term-1","agent":null,"agent_session":null}}}"#,
+    )
+    .unwrap();
+
+    let identity = pane.identity().expect("terminal is a durable fallback");
+    assert_eq!(
+        identity.key,
+        IdentityKey::Terminal {
+            terminal_id: "term-1".into(),
+        }
+    );
+    assert!(identity.agent.is_empty());
+    assert!(identity.agent_source.is_none());
 }
