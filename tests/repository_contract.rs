@@ -2,6 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn files_below(root: &Path) -> Vec<PathBuf> {
+    if !root.is_dir() {
+        return Vec::new();
+    }
     let mut files = Vec::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(directory) = pending.pop() {
@@ -34,21 +37,21 @@ fn pivot_has_one_rust_binary_and_no_legacy_runtime_or_python_tests() {
     assert!(cargo.contains("version = \"1.0.0\""));
     assert!(cargo.contains("edition = \"2021\""));
 
-    let forbidden = files_below(root).into_iter().any(|path| {
-        path == root.join("install_claude_sounds.py")
-            || path.starts_with(root.join("sounds/events"))
-            || path.starts_with(root.join("sounds/packs"))
-            || path.starts_with(root.join("sounds/themes/personal"))
-            || path.extension().is_some_and(|extension| extension == "py")
-                && (path.starts_with(root.join("sounds")) || path.starts_with(root.join("tests")))
-    });
+    let forbidden = root.join("install_claude_sounds.py").exists()
+        || root.join("sounds/events").exists()
+        || root.join("sounds/packs").exists()
+        || root.join("sounds/themes/personal").exists()
+        || [root.join("sounds"), root.join("tests")]
+            .into_iter()
+            .flat_map(|directory| files_below(&directory))
+            .any(|path| path.extension().is_some_and(|extension| extension == "py"));
     assert!(!forbidden, "legacy runtime inventory remains");
 }
 
 #[test]
 fn repository_retains_exactly_the_seven_bundled_wavs() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut wavs: Vec<_> = files_below(root)
+    let mut wavs: Vec<_> = files_below(&root.join("sounds"))
         .into_iter()
         .filter(|path| path.extension().is_some_and(|extension| extension == "wav"))
         .map(|path| path.strip_prefix(root).unwrap().to_path_buf())
