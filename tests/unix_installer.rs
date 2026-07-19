@@ -112,13 +112,52 @@ fn valid_archive(directory: &Path, contents: &[u8]) -> PathBuf {
     let source = directory.join("archive-source");
     fs::create_dir_all(&source).unwrap();
     fs::write(source.join("session-sounds"), contents).unwrap();
+    fs::write(source.join("LICENSE"), b"license").unwrap();
     let archive = directory.join("fixture.tar.gz");
     let status = Command::new("tar")
         .args(["-czf"])
         .arg(&archive)
         .arg("-C")
         .arg(&source)
-        .arg("session-sounds")
+        .args(["session-sounds", "LICENSE"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    archive
+}
+
+fn archive_with_extra_member(directory: &Path) -> PathBuf {
+    let source = directory.join("extra-source");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("session-sounds"), b"malicious replacement").unwrap();
+    fs::write(source.join("LICENSE"), b"license").unwrap();
+    fs::write(source.join("unexpected"), b"not allowed").unwrap();
+    let archive = directory.join("extra.tar.gz");
+    let status = Command::new("tar")
+        .args(["-czf"])
+        .arg(&archive)
+        .arg("-C")
+        .arg(&source)
+        .args(["session-sounds", "LICENSE", "unexpected"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    archive
+}
+
+fn archive_with_symlink_binary(directory: &Path) -> PathBuf {
+    let source = directory.join("symlink-source");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("payload"), b"symlink payload").unwrap();
+    fs::write(source.join("LICENSE"), b"license").unwrap();
+    symlink("payload", source.join("session-sounds")).unwrap();
+    let archive = directory.join("symlink.tar.gz");
+    let status = Command::new("tar")
+        .args(["-czf"])
+        .arg(&archive)
+        .arg("-C")
+        .arg(&source)
+        .args(["session-sounds", "LICENSE"])
         .status()
         .unwrap();
     assert!(status.success());
@@ -235,6 +274,38 @@ fn extraction_failure_preserves_the_existing_binary() {
     let output = fixture.run(&archive, &checksums);
 
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("could not extract"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("could not inspect"));
+    assert_eq!(fs::read(binary).unwrap(), b"working binary");
+}
+
+#[test]
+fn unexpected_archive_member_is_rejected_before_extraction() {
+    let fixture = Fixture::new();
+    let archive = archive_with_extra_member(fixture._directory.path());
+    let checksums = checksums(fixture._directory.path(), &checksum(&archive));
+    fs::create_dir_all(fixture.plugin_root.join("bin")).unwrap();
+    let binary = fixture.plugin_root.join("bin/session-sounds");
+    fs::write(&binary, b"working binary").unwrap();
+
+    let output = fixture.run(&archive, &checksums);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unsafe archive members"));
+    assert_eq!(fs::read(binary).unwrap(), b"working binary");
+}
+
+#[test]
+fn symlink_binary_is_rejected_and_existing_binary_is_preserved() {
+    let fixture = Fixture::new();
+    let archive = archive_with_symlink_binary(fixture._directory.path());
+    let checksums = checksums(fixture._directory.path(), &checksum(&archive));
+    fs::create_dir_all(fixture.plugin_root.join("bin")).unwrap();
+    let binary = fixture.plugin_root.join("bin/session-sounds");
+    fs::write(&binary, b"working binary").unwrap();
+
+    let output = fixture.run(&archive, &checksums);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("regular non-symlink"));
     assert_eq!(fs::read(binary).unwrap(), b"working binary");
 }

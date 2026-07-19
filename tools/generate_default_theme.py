@@ -6,7 +6,7 @@ These are original compositions using pure math synthesis -- no sampled audio,
 no references to copyrighted properties. They ship with the repo as the
 out-of-box experience for anyone who clones session-sounds.
 
-Output: sounds/themes/default/*.wav (tracked in git via gitignore exception)
+Output: sounds/themes/default/*.wav (tracked bundled CC0 assets)
 All output: mono, 44100 Hz, 16-bit PCM WAV, under 5 seconds.
 
 Usage:

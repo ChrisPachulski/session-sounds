@@ -118,6 +118,7 @@ fn release_identity_and_asset_names_agree_everywhere() {
 
     let unix_installer = read(root().join("scripts/install-unix.sh"));
     let windows_installer = read(root().join("scripts/install-windows.ps1"));
+    let packager = read(root().join("scripts/package-release.sh"));
     let release = read(root().join(".github/workflows/release.yml"));
     for target in [
         "aarch64-apple-darwin",
@@ -135,7 +136,7 @@ fn release_identity_and_asset_names_agree_everywhere() {
     }
     assert!(unix_installer.contains("session-sounds-v${VERSION}-${TARGET}.tar.gz"));
     assert!(windows_installer.contains("session-sounds-v$Version-$Target.zip"));
-    assert!(release.contains("session-sounds-v${VERSION}-${TARGET}"));
+    assert!(packager.contains("session-sounds-v${VERSION}-${TARGET}"));
 }
 
 #[test]
@@ -213,6 +214,8 @@ fn living_documentation_has_no_legacy_runtime_contracts() {
         read(root().join("README.md")),
         read(root().join(".codex/skills/session-sounds/SKILL.md")),
         read(root().join(".claude/skills/session-sounds/SKILL.md")),
+        read(root().join(".codex/skills/sound-authoring/SKILL.md")),
+        read(root().join(".claude/skills/sound-authoring/SKILL.md")),
     ];
     for document in documents {
         for removed in [
@@ -225,6 +228,15 @@ fn living_documentation_has_no_legacy_runtime_contracts() {
             "~/.claude/sounds",
             "~/.codex/sessions",
             "25 copyright-free sounds",
+            "tools/extract_clip.py",
+            "tools/generate_all_sounds.py",
+            "tools/generate_event_sounds.py",
+            "config.json",
+            "auto-title",
+            "event sound",
+            "watcher",
+            "terminal title",
+            "gitignored",
         ] {
             assert!(
                 !document.contains(removed),
@@ -232,6 +244,48 @@ fn living_documentation_has_no_legacy_runtime_contracts() {
             );
         }
     }
+}
+
+#[test]
+fn skill_copies_and_tool_claims_are_repository_contracts() {
+    let root = root();
+    let codex_authoring = read(root.join(".codex/skills/sound-authoring/SKILL.md"));
+    let claude_authoring = read(root.join(".claude/skills/sound-authoring/SKILL.md"));
+    assert_eq!(codex_authoring, claude_authoring);
+    for required in [
+        "herdr plugin config-dir chrispachulski.session-sounds",
+        "config.toml",
+        "theme.json",
+        "test-sound",
+        "herdr plugin log list --plugin chrispachulski.session-sounds",
+        "tools/generate_default_theme.py",
+    ] {
+        assert!(
+            codex_authoring.contains(required),
+            "authoring skill omits {required}"
+        );
+    }
+    assert!(root.join("tools/generate_default_theme.py").is_file());
+    assert!(!root.join("tools/sync_skills.py").exists());
+
+    fn normalize_host_heading(text: &str) -> String {
+        text.lines()
+            .map(|line| {
+                if line.starts_with("# Session Sounds — ") {
+                    "# Session Sounds — HOST repository guide"
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+    let codex_session = read(root.join(".codex/skills/session-sounds/SKILL.md"));
+    let claude_session = read(root.join(".claude/skills/session-sounds/SKILL.md"));
+    assert_eq!(
+        normalize_host_heading(&codex_session),
+        normalize_host_heading(&claude_session)
+    );
 }
 
 #[test]
@@ -250,14 +304,42 @@ fn automation_covers_three_os_ci_and_one_stable_release() {
 
     let release = read(root().join(".github/workflows/release.yml"));
     assert!(release.contains("^v(0|[1-9][0-9]*)"));
-    assert!(release.contains("uses: taiki-e/install-action@v2"));
+    assert!(release
+        .contains("uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2"));
     assert!(release.contains("cross build --release --locked"));
     assert!(release.contains("permissions:\n      contents: write"));
     assert_eq!(
         release
-            .matches("uses: softprops/action-gh-release@v2")
+            .matches("uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2")
             .count(),
         1
     );
-    assert!(release.contains("sha256sum session-sounds-v* > SHA256SUMS"));
+    assert!(release.contains("scripts/package-release.sh \"$VERSION\" inputs release"));
+
+    let all_workflows = format!("{ci}\n{release}");
+    for pinned in [
+        "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0",
+        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
+        "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1",
+        "dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable snapshot",
+    ] {
+        assert!(
+            all_workflows.contains(pinned),
+            "workflow omits pin {pinned}"
+        );
+    }
+    assert!(all_workflows.contains("toolchain: stable"));
+    for unpinned in [
+        "actions/checkout@v",
+        "actions/upload-artifact@v",
+        "actions/download-artifact@v",
+        "dtolnay/rust-toolchain@stable",
+        "softprops/action-gh-release@v",
+        "taiki-e/install-action@v",
+    ] {
+        assert!(
+            !all_workflows.contains(unpinned),
+            "workflow retains {unpinned}"
+        );
+    }
 }

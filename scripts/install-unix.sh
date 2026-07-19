@@ -79,9 +79,20 @@ verify_checksum() {
 extract_archive() {
     archive=$1
     destination=$2
+    members_file="${destination}.members"
+    tar -tzf "$archive" > "$members_file" || fail "could not inspect '$archive'"
+    awk '
+        $0 == "session-sounds" { binary++; next }
+        $0 == "LICENSE" { license++; next }
+        { unsafe = 1 }
+        END { exit !(binary == 1 && license == 1 && !unsafe) }
+    ' "$members_file" || fail "unsafe archive members; expected exactly session-sounds and LICENSE"
     mkdir -p "$destination"
     tar -xzf "$archive" -C "$destination" || fail "could not extract '$archive'"
-    [ -f "$destination/session-sounds" ] || fail "archive did not contain a session-sounds binary"
+    [ -f "$destination/session-sounds" ] && [ ! -L "$destination/session-sounds" ] \
+        || fail "archive binary is not a regular non-symlink session-sounds file"
+    [ -f "$destination/LICENSE" ] && [ ! -L "$destination/LICENSE" ] \
+        || fail "archive LICENSE is not a regular non-symlink file"
     chmod 0755 "$destination/session-sounds" || fail "could not make the staged binary executable"
 }
 
