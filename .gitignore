@@ -1,13 +1,3 @@
+target/
 __pycache__/
-**/__pycache__/
 *.pyc
-assignments/*.json
-pending_pick.json
-
-# WAV files -- sounds are local-only, never committed
-sounds/*.wav
-sounds/themes/**/*.wav
-
-# Exception: synthesized sounds are tracked (copyright-free, ship with repo)
-!sounds/events/*/default.wav
-!sounds/themes/default/*.wav
